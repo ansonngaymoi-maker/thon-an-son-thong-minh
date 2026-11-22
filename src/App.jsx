@@ -3,11 +3,12 @@ import {
   Bell, Home, Newspaper, Users, Calendar, MessageSquare, QrCode,
   Shield, Phone, MapPin, Plus, Trash2, Edit2, LogOut, Search,
   CheckCircle, AlertTriangle, Download, Printer, ListPlus,
-  Home as HomeIcon, Lock, Eye, EyeOff, RefreshCw, Info, ChevronRight, X
+  Home as HomeIcon, Lock, Eye, EyeOff, RefreshCw, Info, ChevronRight, X,
+  Image as ImageIcon
 } from 'lucide-react';
 import { supabase, isConfigured } from './supabaseClient';
 
-const APP_VERSION = 'v1.0.0';
+const APP_VERSION = 'v1.1.0';
 
 const QRImage = ({ url, size = 200 }) => {
   const src = `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encodeURIComponent(url)}`;
@@ -48,6 +49,11 @@ export default function App() {
   const [showQRModal, setShowQRModal] = useState(false);
   const [toast, setToast] = useState('');
   const [pushStatus, setPushStatus] = useState('idle');
+
+  // Announcement image upload states
+  const [annImageFile, setAnnImageFile] = useState(null);
+  const [annImagePreview, setAnnImagePreview] = useState('');
+  const [uploadingAnn, setUploadingAnn] = useState(false);
 
   // Feedback form
   const [fbForm, setFbForm] = useState({ sender_name: '', sender_phone: '', category: 'Đường làng, ngõ xóm', content: '' });
@@ -148,6 +154,58 @@ export default function App() {
       showToast('Đã gửi phản ánh đến Ban thôn. Cảm ơn bà con!');
     } else {
       showToast('Có lỗi xảy ra, vui lòng thử lại.');
+    }
+  };
+
+  const handleAnnImageChange = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) {
+      showToast('Ảnh quá lớn (tối đa 5MB). Vui lòng chọn ảnh nhẹ hơn.');
+      return;
+    }
+    setAnnImageFile(file);
+    setAnnImagePreview(URL.createObjectURL(file));
+  };
+
+  const clearAnnImage = () => {
+    setAnnImageFile(null);
+    setAnnImagePreview('');
+  };
+
+  const handleAnnouncementSubmit = async (e) => {
+    e.preventDefault();
+    setUploadingAnn(true);
+    try {
+      let image_url = null;
+      if (annImageFile) {
+        const ext = annImageFile.name.split('.').pop() || 'jpg';
+        const fileName = `tb-${Date.now()}-${Math.random().toString(36).slice(2, 7)}.${ext}`;
+        const { error: uploadError } = await supabase.storage
+          .from('anh-thong-bao')
+          .upload(fileName, annImageFile, { cacheControl: '3600', upsert: false });
+
+        if (uploadError) {
+          showToast('Lỗi tải ảnh lên: ' + uploadError.message);
+          setUploadingAnn(false);
+          return;
+        }
+        const { data: urlData } = supabase.storage.from('anh-thong-bao').getPublicUrl(fileName);
+        image_url = urlData.publicUrl;
+      }
+
+      const payload = image_url ? { ...annForm, image_url } : { ...annForm };
+      const { error } = await supabase.from('announcements').insert([payload]);
+      if (!error) {
+        setAnnForm({ title: '', content: '', priority: 'normal', is_pinned: false });
+        clearAnnImage();
+        fetchPublicData();
+        showToast('Đã đăng thông báo mới!');
+      } else {
+        showToast('Lỗi đăng thông báo: ' + error.message);
+      }
+    } finally {
+      setUploadingAnn(false);
     }
   };
 
@@ -307,13 +365,27 @@ export default function App() {
           {adminTab === 'announcements' && (
             <div className="space-y-6">
               <h1 className="text-2xl font-bold">Quản lý Thông báo thôn</h1>
-              <form onSubmit={async (e) => {
-                e.preventDefault();
-                const { error } = await supabase.from('announcements').insert([annForm]);
-                if (!error) { setAnnForm({ title: '', content: '', priority: 'normal', is_pinned: false }); fetchPublicData(); showToast('Đã đăng thông báo mới!'); }
-              }} className="bg-white p-6 rounded-2xl shadow-sm border space-y-4">
+              <form onSubmit={handleAnnouncementSubmit} className="bg-white p-6 rounded-2xl shadow-sm border space-y-4">
                 <input required placeholder="Tiêu đề thông báo..." value={annForm.title} onChange={e => setAnnForm({ ...annForm, title: e.target.value })} className="w-full border px-4 py-2.5 rounded-xl" />
                 <textarea required rows={4} placeholder="Nội dung chi tiết..." value={annForm.content} onChange={e => setAnnForm({ ...annForm, content: e.target.value })} className="w-full border px-4 py-2.5 rounded-xl" />
+
+                {/* Chọn ảnh đính kèm */}
+                <div className="space-y-2">
+                  <label className="inline-flex items-center gap-2 cursor-pointer bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-xl text-sm font-medium border border-slate-200 transition">
+                    <ImageIcon className="w-4 h-4 text-emerald-700" />
+                    <span>{annImageFile ? 'Đổi ảnh khác' : 'Chèn ảnh đính kèm (tùy chọn)'}</span>
+                    <input type="file" accept="image/*" onChange={handleAnnImageChange} className="hidden" />
+                  </label>
+                  {annImagePreview && (
+                    <div className="relative inline-block mt-2">
+                      <img src={annImagePreview} alt="Xem trước" className="max-h-48 rounded-xl border border-slate-200 object-cover" />
+                      <button type="button" onClick={clearAnnImage} className="absolute -top-2 -right-2 bg-red-600 text-white rounded-full p-1 shadow hover:bg-red-700" title="Bỏ ảnh">
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  )}
+                </div>
+
                 <div className="flex flex-wrap gap-4 items-center">
                   <select value={annForm.priority} onChange={e => setAnnForm({ ...annForm, priority: e.target.value })} className="border px-3 py-2 rounded-xl text-sm">
                     <option value="normal">Mức bình thường</option>
@@ -323,15 +395,22 @@ export default function App() {
                   <label className="flex items-center gap-2 text-sm">
                     <input type="checkbox" checked={annForm.is_pinned} onChange={e => setAnnForm({ ...annForm, is_pinned: e.target.checked })} /> Ghim lên đầu trang
                   </label>
-                  <button className="ml-auto bg-emerald-700 text-white px-6 py-2.5 rounded-xl font-semibold hover:bg-emerald-800 flex items-center gap-2"><Plus className="w-4 h-4" /> Đăng thông báo</button>
+                  <button disabled={uploadingAnn} className="ml-auto bg-emerald-700 text-white px-6 py-2.5 rounded-xl font-semibold hover:bg-emerald-800 disabled:opacity-60 flex items-center gap-2">
+                    <Plus className="w-4 h-4" /> {uploadingAnn ? 'Đang tải lên...' : 'Đăng thông báo'}
+                  </button>
                 </div>
               </form>
               <div className="space-y-3">
                 {announcements.map(a => (
                   <div key={a.id} className="bg-white p-4 rounded-xl border flex justify-between items-start gap-4">
-                    <div>
+                    <div className="space-y-2 flex-1">
                       <div className="font-bold text-slate-800">{a.is_pinned && '📌 '}{a.title}</div>
-                      <p className="text-sm text-slate-600 mt-1 whitespace-pre-line">{a.content}</p>
+                      <p className="text-sm text-slate-600 whitespace-pre-line">{a.content}</p>
+                      {a.image_url && (
+                        <a href={a.image_url} target="_blank" rel="noreferrer" className="block">
+                          <img src={a.image_url} alt={a.title} className="max-h-56 rounded-xl border border-slate-200 object-cover mt-2" />
+                        </a>
+                      )}
                     </div>
                     <button onClick={async () => { if (confirm('Xóa thông báo này?')) { await supabase.from('announcements').delete().eq('id', a.id); fetchPublicData(); } }} className="text-red-500 hover:bg-red-50 p-2 rounded-lg"><Trash2 className="w-4 h-4" /></button>
                   </div>
@@ -347,6 +426,7 @@ export default function App() {
                 e.preventDefault();
                 const { error } = await supabase.from('news').insert([newsForm]);
                 if (!error) { setNewsForm({ title: '', content: '', category: 'Hoạt động cộng đồng', video_url: '' }); fetchPublicData(); showToast('Đã đăng bài viết!'); }
+                else showToast('Lỗi: ' + error.message);
               }} className="bg-white p-6 rounded-2xl shadow-sm border space-y-4">
                 <input required placeholder="Tiêu đề bài viết..." value={newsForm.title} onChange={e => setNewsForm({ ...newsForm, title: e.target.value })} className="w-full border px-4 py-2.5 rounded-xl" />
                 <textarea required rows={4} placeholder="Nội dung bài viết..." value={newsForm.content} onChange={e => setNewsForm({ ...newsForm, content: e.target.value })} className="w-full border px-4 py-2.5 rounded-xl" />
@@ -371,6 +451,7 @@ export default function App() {
                 e.preventDefault();
                 const { error } = await supabase.from('officials').insert([offForm]);
                 if (!error) { setOffForm({ full_name: '', role: '', phone: '', sort_order: officials.length + 1 }); fetchPublicData(); showToast('Đã thêm cán bộ!'); }
+                else showToast('Lỗi: ' + error.message);
               }} className="bg-white p-6 rounded-2xl border grid md:grid-cols-4 gap-3">
                 <input required placeholder="Họ và tên" value={offForm.full_name} onChange={e => setOffForm({ ...offForm, full_name: e.target.value })} className="border px-3 py-2 rounded-xl" />
                 <input required placeholder="Chức vụ" value={offForm.role} onChange={e => setOffForm({ ...offForm, role: e.target.value })} className="border px-3 py-2 rounded-xl" />
@@ -402,6 +483,7 @@ export default function App() {
                 e.preventDefault();
                 const { error } = await supabase.from('events').insert([evtForm]);
                 if (!error) { setEvtForm({ title: '', event_date: '', event_time: '19:30', location: 'Nhà văn hóa thôn An Sơn', category: 'Họp dân', description: '' }); fetchPublicData(); showToast('Đã thêm lịch!'); }
+                else showToast('Lỗi: ' + error.message);
               }} className="bg-white p-6 rounded-2xl border grid md:grid-cols-3 gap-3">
                 <input required placeholder="Tên sự kiện / cuộc họp" value={evtForm.title} onChange={e => setEvtForm({ ...evtForm, title: e.target.value })} className="border px-3 py-2 rounded-xl" />
                 <input required type="date" value={evtForm.event_date} onChange={e => setEvtForm({ ...evtForm, event_date: e.target.value })} className="border px-3 py-2 rounded-xl" />
@@ -475,6 +557,7 @@ export default function App() {
                 const payload = { ...resForm, birth_year: resForm.birth_year ? Number(resForm.birth_year) : null, household_id: resForm.household_id || null };
                 const { error } = await supabase.from('residents').insert([payload]);
                 if (!error) { setResForm({ household_id: '', full_name: '', birth_year: '', gender: 'Nam', relationship: 'Thành viên', phone: '', group_tag: '', residency_status: 'Thường trú' }); fetchAdminData(); showToast('Đã thêm dân cư!'); }
+                else showToast('Lỗi: ' + error.message);
               }} className="bg-white p-5 rounded-2xl border space-y-3">
                 <h3 className="font-bold text-sky-800">+ THÊM DÂN CƯ (THÀNH VIÊN)</h3>
                 <div className="grid md:grid-cols-4 gap-3">
@@ -582,7 +665,7 @@ export default function App() {
               </div>
               <div className="bg-white p-10 rounded-3xl border-4 border-emerald-700 max-w-xl mx-auto text-center space-y-5 shadow-lg">
                 <div className="text-emerald-800 font-bold tracking-wider text-sm">XÃ CAM LỘ – TỈNH QUẢNG TRỊ</div>
-                <h2 className="text-3xl font-extrabold text-emerald-900">THÔN AN SƠN THÔNG MINH</h2>
+                <h2 className="text-3xl font-extrabold text-emerald-900">THÔN AN SƠN</h2>
                 <p className="text-slate-600">Thông tin cộng đồng – Kết nối người dân – Chung tay xây dựng quê hương</p>
                 <QRImage url={siteUrl} size={260} />
                 <p className="text-lg font-bold text-slate-800">QUÉT MÃ QR BẰNG ZALO HOẶC CAMERA ĐIỆN THOẠI</p>
@@ -634,7 +717,7 @@ export default function App() {
           <div className="flex items-center gap-3">
             <img src="/icon.svg" alt="Logo" className="w-14 h-14 rounded-2xl shadow" />
             <div>
-              <h1 className="text-xl md:text-2xl font-extrabold tracking-tight">THÔN AN SƠN THÔNG MINH</h1>
+              <h1 className="text-xl md:text-2xl font-extrabold tracking-tight">THÔN AN SƠN</h1>
               <p className="text-xs md:text-sm text-emerald-100 font-medium">XÃ CAM LỘ – TỈNH QUẢNG TRỊ</p>
             </div>
           </div>
@@ -690,6 +773,11 @@ export default function App() {
                   </div>
                   <h4 className="font-bold text-slate-800">{a.title}</h4>
                   <p className="text-sm text-slate-600 mt-1 whitespace-pre-line">{a.content}</p>
+                  {a.image_url && (
+                    <a href={a.image_url} target="_blank" rel="noreferrer" className="block mt-3">
+                      <img src={a.image_url} alt={a.title} className="w-full max-h-80 object-contain rounded-xl border border-slate-100 bg-slate-50" />
+                    </a>
+                  )}
                 </div>
               ))}
             </section>
@@ -705,6 +793,11 @@ export default function App() {
                 <div className="text-xs text-slate-400 mb-1">{a.is_pinned ? '📌 Đã ghim • ' : ''}{new Date(a.created_at).toLocaleDateString('vi-VN')}</div>
                 <h3 className="font-bold text-lg text-slate-800">{a.title}</h3>
                 <p className="text-slate-600 mt-2 whitespace-pre-line">{a.content}</p>
+                {a.image_url && (
+                  <a href={a.image_url} target="_blank" rel="noreferrer" className="block mt-3">
+                    <img src={a.image_url} alt={a.title} className="w-full max-h-96 object-contain rounded-xl border border-slate-100 bg-slate-50" />
+                  </a>
+                )}
               </div>
             ))}
           </div>
