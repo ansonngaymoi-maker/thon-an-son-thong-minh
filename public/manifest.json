@@ -1,0 +1,18 @@
+{
+  "name": "Thôn An Sơn Thông Minh – Xã Cam Lộ",
+  "short_name": "An Sơn",
+  "description": "Thông tin cộng đồng – Kết nối người dân – Chung tay xây dựng quê hương Thôn An Sơn, xã Cam Lộ, tỉnh Quảng Trị.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#15803d",
+  "lang": "vi",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
