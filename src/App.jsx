@@ -4,15 +4,17 @@ import {
   Shield, Phone, MapPin, Plus, Trash2, LogOut, Search,
   CheckCircle, AlertTriangle, Download, Printer, ListPlus,
   Home as HomeIcon, Lock, RefreshCw, ChevronRight, X,
-  Image as ImageIcon, Map, PhoneCall, ExternalLink, Copy, Check
+  Image as ImageIcon, Map, PhoneCall, ExternalLink, Copy, Check, ArrowDown
 } from 'lucide-react';
 import { supabase, isConfigured } from './supabaseClient';
 
-const APP_VERSION = 'v1.4.0';
+const APP_VERSION = 'v1.5.0';
 const SEEN_IDS_KEY = 'thon_an_son_seen_post_ids_v1';
 const ONESIGNAL_APP_ID =
   (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_ONESIGNAL_APP_ID) ||
   'e21ec54f-f220-4014-a603-d9c0f23977ab';
+const ONESIGNAL_REST_KEY =
+  (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_ONESIGNAL_REST_KEY) || '';
 
 const QRImage = ({ url, size = 200 }) => {
   const src = `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encodeURIComponent(url)}`;
@@ -53,12 +55,13 @@ export default function App() {
   const [toast, setToast] = useState('');
   const [copiedKey, setCopiedKey] = useState('');
   const [highlightedPost, setHighlightedPost] = useState('');
-  const [pushStatus, setPushStatus] = useState(() => {
-    if (typeof window !== 'undefined' && 'Notification' in window) {
-      return Notification.permission;
-    }
-    return 'idle';
-  });
+  const [pushSubscribed, setPushSubscribed] = useState(false);
+
+  // Pull-to-refresh states
+  const [pullDistance, setPullDistance] = useState(0);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const touchStartYRef = useRef(0);
+  const isPullingRef = useRef(false);
 
   const hasInitializedFeedRef = useRef(false);
 
@@ -66,6 +69,8 @@ export default function App() {
   const [annImageFile, setAnnImageFile] = useState(null);
   const [annImagePreview, setAnnImagePreview] = useState('');
   const [uploadingAnn, setUploadingAnn] = useState(false);
+  const [sendPushOnAnn, setSendPushOnAnn] = useState(true);
+  const [sendPushOnNews, setSendPushOnNews] = useState(true);
 
   // Feedback form
   const [fbForm, setFbForm] = useState({ sender_name: '', sender_phone: '', category: 'Đường làng, ngõ xóm', content: '' });
@@ -80,16 +85,62 @@ export default function App() {
   const [listForm, setListForm] = useState({ title: '', description: '', is_public: true, year: 2026 });
   const [itemForm, setItemForm] = useState({ list_id: '', name: '', role_or_group: '', phone: '', detail: '', notes: '' });
 
-  const siteUrl = typeof window !== 'undefined' ? window.location.origin : '';
+  const siteUrl = typeof window !== 'undefined' ? window.location.origin : 'https://thon-an-son-thong-minh.vercel.app';
 
   const showToast = (msg) => {
     setToast(msg);
-    setTimeout(() => setToast(''), 3500);
+    setTimeout(() => setToast(''), 4000);
   };
 
-  // Nạp OneSignal SDK cho web / PWA
+  // Gửi thông báo đẩy qua OneSignal API tới toàn bộ điện thoại bà con
+  const dispatchOneSignalPush = async ({ heading, content, launchUrl, imageUrl }) => {
+    if (!ONESIGNAL_APP_ID || !ONESIGNAL_REST_KEY) {
+      return { ok: false, reason: 'missing_key' };
+    }
+    try {
+      const bodyPayload = {
+        app_id: ONESIGNAL_APP_ID,
+        included_segments: ['Total Subscriptions'],
+        headings: { en: heading, vi: heading },
+        contents: { en: content, vi: content },
+        url: launchUrl || siteUrl,
+      };
+      if (imageUrl) {
+        bodyPayload.chrome_web_image = imageUrl;
+      }
+      const res = await fetch('https://api.onesignal.com/notifications?c=push', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json; charset=utf-8',
+          Authorization: `Key ${ONESIGNAL_REST_KEY}`,
+        },
+        body: JSON.stringify(bodyPayload),
+      });
+      const data = await res.json();
+      if (res.ok && !data.errors) {
+        return { ok: true, recipients: data.recipients || 0 };
+      }
+      return { ok: false, reason: JSON.stringify(data.errors || data) };
+    } catch (err) {
+      return { ok: false, reason: err.message };
+    }
+  };
+
+  // Hủy Service Worker sw.js cũ nếu còn lưu trong cache trình duyệt & nạp OneSignal SDK
   useEffect(() => {
-    if (typeof window === 'undefined' || !ONESIGNAL_APP_ID) return;
+    if (typeof window === 'undefined') return;
+
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then((regs) => {
+        regs.forEach((reg) => {
+          if (reg.active && reg.active.scriptURL && reg.active.scriptURL.endsWith('/sw.js')) {
+            reg.unregister();
+          }
+        });
+      });
+    }
+
+    if (!ONESIGNAL_APP_ID) return;
     window.OneSignalDeferred = window.OneSignalDeferred || [];
     window.OneSignalDeferred.push(async function (OneSignal) {
       try {
@@ -97,11 +148,18 @@ export default function App() {
           appId: ONESIGNAL_APP_ID,
           allowLocalhostAsSecureOrigin: true,
         });
-        if (OneSignal.Notifications && OneSignal.Notifications.permission) {
-          setPushStatus('granted');
+        const optedIn = Boolean(OneSignal.User?.PushSubscription?.optedIn);
+        const hasPerm = Boolean(OneSignal.Notifications?.permission);
+        if (optedIn || hasPerm) {
+          setPushSubscribed(true);
         }
+        OneSignal.User?.PushSubscription?.addEventListener('change', (event) => {
+          setPushSubscribed(Boolean(event?.current?.optedIn));
+        });
       } catch (_err) {
-        // Ignore if already initialized
+        if ('Notification' in window && Notification.permission === 'granted') {
+          setPushSubscribed(true);
+        }
       }
     });
 
@@ -113,6 +171,64 @@ export default function App() {
       document.head.appendChild(script);
     }
   }, []);
+
+  // Kéo màn hình từ trên xuống để tải tin mới nhất (Pull-to-Refresh trên iPhone & Android)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const handleTouchStart = (e) => {
+      if (window.scrollY <= 2 && e.touches.length === 1) {
+        touchStartYRef.current = e.touches[0].clientY;
+        isPullingRef.current = true;
+      } else {
+        isPullingRef.current = false;
+      }
+    };
+
+    const handleTouchMove = (e) => {
+      if (!isPullingRef.current || isRefreshing) return;
+      const currentY = e.touches[0].clientY;
+      const delta = currentY - touchStartYRef.current;
+      if (delta > 0 && window.scrollY <= 2) {
+        setPullDistance(Math.min(delta * 0.45, 95));
+      } else {
+        setPullDistance(0);
+      }
+    };
+
+    const handleTouchEnd = async () => {
+      if (!isPullingRef.current) return;
+      isPullingRef.current = false;
+      if (pullDistance >= 60 && !isRefreshing) {
+        setIsRefreshing(true);
+        setPullDistance(56);
+        await fetchPublicData();
+        if (session) await fetchAdminData();
+        showToast('Đã cập nhật tin mới nhất!');
+        setIsRefreshing(false);
+      }
+      setPullDistance(0);
+    };
+
+    window.addEventListener('touchstart', handleTouchStart, { passive: true });
+    window.addEventListener('touchmove', handleTouchMove, { passive: true });
+    window.addEventListener('touchend', handleTouchEnd);
+
+    return () => {
+      window.removeEventListener('touchstart', handleTouchStart);
+      window.removeEventListener('touchmove', handleTouchMove);
+      window.removeEventListener('touchend', handleTouchEnd);
+    };
+  }, [pullDistance, isRefreshing, session]);
+
+  const handleManualRefresh = async () => {
+    if (isRefreshing) return;
+    setIsRefreshing(true);
+    await fetchPublicData();
+    if (session) await fetchAdminData();
+    setIsRefreshing(false);
+    showToast('Đã tải lại thông tin mới nhất!');
+  };
 
   const triggerBrowserAlert = (title, body, postParam) => {
     setToast(`${title}: ${body}`);
@@ -131,7 +247,7 @@ export default function App() {
           if (postParam) openPostFromKey(postParam);
         };
       } catch (_err) {
-        // Fallback already shown via toast
+        // Ignore on iOS standalone when service worker handles push
       }
     }
   };
@@ -152,7 +268,7 @@ export default function App() {
   };
 
   const getPostShareUrl = (type, id) => {
-    const base = typeof window !== 'undefined' ? `${window.location.origin}${window.location.pathname}` : '';
+    const base = typeof window !== 'undefined' ? `${window.location.origin}${window.location.pathname}` : siteUrl;
     return `${base}?post=${type}-${id}`;
   };
 
@@ -249,7 +365,7 @@ export default function App() {
 
     if (!hasInitializedFeedRef.current) {
       hasInitializedFeedRef.current = true;
-      if (seenList.length > 0 && Notification.permission === 'granted') {
+      if (seenList.length > 0 && 'Notification' in window && Notification.permission === 'granted') {
         const newestAnn = (annRows || []).find((r) => !seenList.includes(`announcements-${r.id}`));
         const newestNews = (newsRows || []).find((r) => !seenList.includes(`news-${r.id}`));
         if (newestAnn) {
@@ -376,12 +492,27 @@ export default function App() {
       }
 
       const payload = image_url ? { ...annForm, image_url } : { ...annForm };
-      const { error } = await supabase.from('announcements').insert([payload]);
+      const { data: insertedRows, error } = await supabase.from('announcements').insert([payload]).select();
       if (!error) {
+        const created = insertedRows?.[0];
+        let pushMsg = 'Đã đăng thông báo mới!';
+        if (sendPushOnAnn) {
+          const pushRes = await dispatchOneSignalPush({
+            heading: 'Thông báo mới – Thôn An Sơn',
+            content: annForm.title,
+            launchUrl: created ? getPostShareUrl('announcements', created.id) : siteUrl,
+            imageUrl: image_url,
+          });
+          if (pushRes.ok) {
+            pushMsg = `Đã đăng thông báo và gửi chuông báo tới điện thoại bà con!`;
+          } else if (pushRes.reason === 'missing_key') {
+            pushMsg = 'Đã đăng thông báo (Chưa gắn VITE_ONESIGNAL_REST_KEY trên Vercel nên chưa đẩy chuông nền).';
+          }
+        }
         setAnnForm({ title: '', content: '', priority: 'normal', is_pinned: false });
         clearAnnImage();
         fetchPublicData();
-        showToast('Đã đăng thông báo mới!');
+        showToast(pushMsg);
       } else {
         showToast('Lỗi đăng thông báo: ' + error.message);
       }
@@ -391,28 +522,47 @@ export default function App() {
   };
 
   const requestNotification = async () => {
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+    const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+
+    if (isIOS && !isStandalone) {
+      showToast('Trên iPhone: Bấm nút Chia sẻ (↑) ở dưới Safari → chọn "Thêm vào MH chính", sau đó mở biểu tượng ngoài màn hình chính để bật thông báo.');
+      return;
+    }
+
     if (typeof window !== 'undefined' && window.OneSignalDeferred) {
       window.OneSignalDeferred.push(async function (OneSignal) {
         try {
-          if (OneSignal.Slidedown && OneSignal.Slidedown.promptPush) {
-            await OneSignal.Slidedown.promptPush();
-          } else if (OneSignal.Notifications && OneSignal.Notifications.requestPermission) {
-            await OneSignal.Notifications.requestPermission();
+          await OneSignal.Notifications.requestPermission();
+          await OneSignal.User.PushSubscription.optIn();
+          const opted = Boolean(OneSignal.User?.PushSubscription?.optedIn);
+          if (opted || OneSignal.Notifications?.permission) {
+            setPushSubscribed(true);
+            showToast('Đã bật thông báo nền! Máy sẽ rung chuông ngay cả khi tắt ứng dụng.');
+          } else {
+            showToast('Vui lòng chọn "Cho phép" khi điện thoại hỏi quyền thông báo.');
           }
         } catch (_e) {
-          // Fallback below
+          if ('Notification' in window) {
+            const perm = await Notification.requestPermission();
+            if (perm === 'granted') {
+              setPushSubscribed(true);
+              showToast('Đã bật thông báo trên thiết bị!');
+            }
+          }
         }
       });
+      return;
     }
 
     if (!('Notification' in window)) {
-      showToast('Trình duyệt chưa hỗ trợ thông báo. Trên iPhone hãy bấm Thêm vào Màn hình chính trước.');
+      showToast('Trình duyệt chưa hỗ trợ thông báo. Hãy mở từ biểu tượng ngoài Màn hình chính.');
       return;
     }
     const perm = await Notification.requestPermission();
-    setPushStatus(perm);
     if (perm === 'granted') {
-      showToast('Đã bật thông báo! Mỗi khi có thông báo hoặc tin tức mới, máy sẽ báo ngay.');
+      setPushSubscribed(true);
+      showToast('Đã bật thông báo! Mỗi khi có tin mới, máy sẽ báo ngay.');
     } else {
       showToast('Bạn chưa cấp quyền thông báo trên thiết bị.');
     }
@@ -509,7 +659,7 @@ export default function App() {
 
     return (
       <div className="min-h-screen bg-slate-100 flex flex-col md:flex-row">
-        {toast && <div className="fixed top-4 right-4 z-50 bg-emerald-800 text-white px-5 py-3 rounded-xl shadow-lg no-print">{toast}</div>}
+        {toast && <div className="fixed top-4 right-4 z-50 bg-emerald-800 text-white px-5 py-3 rounded-xl shadow-lg no-print max-w-sm text-sm">{toast}</div>}
 
         <aside className="w-full md:w-64 bg-emerald-900 text-white p-4 flex flex-col no-print">
           <div className="mb-4 md:mb-6 pb-3 md:pb-4 border-b border-emerald-800 flex items-center justify-between md:block">
@@ -599,9 +749,15 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="bg-white p-6 rounded-2xl border shadow-sm">
-                <h3 className="font-bold text-slate-800 mb-2">Trạng thái bảo mật & Kết nối</h3>
-                <p className="text-sm text-emerald-700 flex items-center gap-2"><CheckCircle className="w-4 h-4 shrink-0" /> Đã kết nối cơ sở dữ liệu Supabase thời gian thực và OneSignal Push.</p>
+              <div className="bg-white p-6 rounded-2xl border shadow-sm space-y-2">
+                <h3 className="font-bold text-slate-800">Trạng thái bảo mật & Thông báo đẩy</h3>
+                <p className="text-sm text-emerald-700 flex items-center gap-2"><CheckCircle className="w-4 h-4 shrink-0" /> Đã kết nối cơ sở dữ liệu Supabase thời gian thực.</p>
+                <p className={`text-sm flex items-center gap-2 ${ONESIGNAL_REST_KEY ? 'text-emerald-700' : 'text-amber-600'}`}>
+                  {ONESIGNAL_REST_KEY ? <CheckCircle className="w-4 h-4 shrink-0" /> : <AlertTriangle className="w-4 h-4 shrink-0" />}
+                  {ONESIGNAL_REST_KEY
+                    ? 'Đã kết nối tự động đẩy thông báo nền tới iPhone & Android.'
+                    : 'Chưa gắn biến VITE_ONESIGNAL_REST_KEY trên Vercel (cần thêm để tự động đẩy chuông khi đăng bài).'}
+                </p>
               </div>
             </div>
           )}
@@ -637,6 +793,9 @@ export default function App() {
                   </select>
                   <label className="flex items-center gap-2 text-sm">
                     <input type="checkbox" checked={annForm.is_pinned} onChange={e => setAnnForm({ ...annForm, is_pinned: e.target.checked })} /> Ghim lên đầu trang
+                  </label>
+                  <label className="flex items-center gap-2 text-sm font-semibold text-emerald-800">
+                    <input type="checkbox" checked={sendPushOnAnn} onChange={e => setSendPushOnAnn(e.target.checked)} /> Đẩy chuông báo tới điện thoại bà con
                   </label>
                   <button disabled={uploadingAnn} className="ml-auto bg-emerald-700 text-white px-6 py-2.5 rounded-xl font-semibold hover:bg-emerald-800 disabled:opacity-60 flex items-center gap-2">
                     <Plus className="w-4 h-4" /> {uploadingAnn ? 'Đang tải lên...' : 'Đăng thông báo'}
@@ -675,14 +834,32 @@ export default function App() {
               <h1 className="text-2xl font-bold">Quản lý Tin tức & Hoạt động</h1>
               <form onSubmit={async (e) => {
                 e.preventDefault();
-                const { error } = await supabase.from('news').insert([newsForm]);
-                if (!error) { setNewsForm({ title: '', content: '', category: 'Hoạt động cộng đồng', video_url: '' }); fetchPublicData(); showToast('Đã đăng bài viết!'); }
-                else showToast('Lỗi: ' + error.message);
+                const { data: insertedRows, error } = await supabase.from('news').insert([newsForm]).select();
+                if (!error) {
+                  const created = insertedRows?.[0];
+                  let msg = 'Đã đăng bài viết!';
+                  if (sendPushOnNews) {
+                    const pushRes = await dispatchOneSignalPush({
+                      heading: 'Tin tức mới – Thôn An Sơn',
+                      content: newsForm.title,
+                      launchUrl: created ? getPostShareUrl('news', created.id) : siteUrl,
+                    });
+                    if (pushRes.ok) msg = 'Đã đăng bài viết và gửi chuông báo tới điện thoại bà con!';
+                  }
+                  setNewsForm({ title: '', content: '', category: 'Hoạt động cộng đồng', video_url: '' });
+                  fetchPublicData();
+                  showToast(msg);
+                } else showToast('Lỗi: ' + error.message);
               }} className="bg-white p-6 rounded-2xl shadow-sm border space-y-4">
                 <input required placeholder="Tiêu đề bài viết..." value={newsForm.title} onChange={e => setNewsForm({ ...newsForm, title: e.target.value })} className="w-full border px-4 py-2.5 rounded-xl" />
                 <textarea required rows={4} placeholder="Nội dung bài viết..." value={newsForm.content} onChange={e => setNewsForm({ ...newsForm, content: e.target.value })} className="w-full border px-4 py-2.5 rounded-xl" />
                 <input placeholder="Link video YouTube (nếu có)..." value={newsForm.video_url} onChange={e => setNewsForm({ ...newsForm, video_url: e.target.value })} className="w-full border px-4 py-2.5 rounded-xl text-sm" />
-                <button className="bg-emerald-700 text-white px-6 py-2.5 rounded-xl font-semibold">Đăng bài viết</button>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <label className="flex items-center gap-2 text-sm font-semibold text-emerald-800">
+                    <input type="checkbox" checked={sendPushOnNews} onChange={e => setSendPushOnNews(e.target.checked)} /> Đẩy chuông báo tới điện thoại bà con
+                  </label>
+                  <button className="bg-emerald-700 text-white px-6 py-2.5 rounded-xl font-semibold">Đăng bài viết</button>
+                </div>
               </form>
               <div className="space-y-3">
                 {news.map(n => (
@@ -942,9 +1119,9 @@ export default function App() {
                 <div className="flex items-center justify-between">
                   <div>
                     <div className="font-bold text-lg">Phiên bản hiện tại: {APP_VERSION}</div>
-                    <p className="text-sm text-slate-500">Kiến trúc PWA mô-đun hóa, tự động cập nhật khi có bản nâng cấp mới trên Vercel.</p>
+                    <p className="text-sm text-slate-500">Kiến trúc PWA mô-đun hóa, hỗ trợ kéo vuốt làm mới và tự động đẩy thông báo nền.</p>
                   </div>
-                  <button onClick={() => window.location.reload(true)} className="bg-slate-100 hover:bg-slate-200 px-4 py-2 rounded-xl text-sm font-medium flex items-center gap-2"><RefreshCw className="w-4 h-4" /> Kiểm tra cập nhật</button>
+                  <button onClick={() => window.location.reload()} className="bg-slate-100 hover:bg-slate-200 px-4 py-2 rounded-xl text-sm font-medium flex items-center gap-2"><RefreshCw className="w-4 h-4" /> Kiểm tra cập nhật</button>
                 </div>
                 <hr />
                 <div>
@@ -974,6 +1151,25 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#f3f6f4] pb-24">
+      {/* Thanh báo kéo vuốt để làm mới tin */}
+      {(pullDistance > 0 || isRefreshing) && (
+        <div
+          style={{ height: `${isRefreshing ? 48 : pullDistance}px` }}
+          className="bg-emerald-800 text-white text-xs font-bold flex items-center justify-center gap-2 overflow-hidden transition-all"
+        >
+          {isRefreshing ? (
+            <>
+              <RefreshCw className="w-4 h-4 animate-spin" /> Đang tải tin mới nhất...
+            </>
+          ) : (
+            <>
+              <ArrowDown className={`w-4 h-4 transition-transform ${pullDistance >= 60 ? 'rotate-180' : ''}`} />
+              {pullDistance >= 60 ? 'Thả tay để cập nhật tin mới' : 'Kéo xuống để làm mới tin'}
+            </>
+          )}
+        </div>
+      )}
+
       {toast && (
         <div className="fixed top-4 right-4 z-50 bg-emerald-800 text-white px-4 py-3 rounded-xl shadow-lg max-w-sm text-sm font-medium">
           {toast}
@@ -985,6 +1181,13 @@ export default function App() {
           <div className="flex justify-between items-center mb-4">
             <span className="text-[11px] bg-white/15 backdrop-blur-sm px-3 py-1 rounded-full capitalize font-medium">{todayStr}</span>
             <div className="flex items-center gap-2">
+              <button
+                onClick={handleManualRefresh}
+                className="bg-white/15 hover:bg-white/25 p-2 rounded-xl transition"
+                title="Làm mới tin"
+              >
+                <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+              </button>
               <button onClick={() => setShowQRModal(true)} className="bg-white/15 hover:bg-white/25 p-2 rounded-xl transition" title="Mã QR chia sẻ">
                 <QrCode className="w-4 h-4" />
               </button>
@@ -1073,10 +1276,10 @@ export default function App() {
             <div className="bg-white rounded-2xl p-4 border border-emerald-100 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
                 <div className="text-sm font-bold text-slate-800">Nhận tin báo nhanh từ Ban thôn</div>
-                <div className="text-xs text-slate-500">Bật 1 lần để điện thoại tự bật thông báo khi có tin mới</div>
+                <div className="text-xs text-slate-500">Bật 1 lần để điện thoại rung chuông ngay cả khi tắt ứng dụng</div>
               </div>
               <button onClick={requestNotification} className="bg-emerald-700 hover:bg-emerald-800 text-white px-4 py-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shrink-0">
-                <Bell className="w-4 h-4" /> {pushStatus === 'granted' ? 'Đã bật thông báo' : 'Bật thông báo'}
+                <Bell className="w-4 h-4" /> {pushSubscribed ? 'Đã bật thông báo nền' : 'Bật thông báo'}
               </button>
             </div>
           </>
