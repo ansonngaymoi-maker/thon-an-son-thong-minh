@@ -8,7 +8,7 @@ import {
 } from 'lucide-react';
 import { supabase, isConfigured } from './supabaseClient';
 
-const APP_VERSION = 'v1.2.0';
+const APP_VERSION = 'v1.2.1';
 
 const QRImage = ({ url, size = 200 }) => {
   const src = `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encodeURIComponent(url)}`;
@@ -299,39 +299,45 @@ export default function App() {
     }
 
     const adminMenu = [
-      { id: 'overview', label: 'Tổng quan', icon: HomeIcon },
-      { id: 'announcements', label: 'Thông báo', icon: Bell },
-      { id: 'news', label: 'Tin tức', icon: Newspaper },
-      { id: 'officials', label: 'Cán bộ', icon: Users },
-      { id: 'events', label: 'Lịch thôn', icon: Calendar },
-      { id: 'feedbacks', label: `Phản ánh (${feedbacks.filter(f => f.status === 'received').length})`, icon: MessageSquare },
-      { id: 'households', label: 'Hộ dân & Dân cư', icon: Shield },
-      { id: 'lists', label: 'Danh sách mở rộng', icon: ListPlus },
-      { id: 'qr', label: 'Mã QR & In ấn', icon: QrCode },
-      { id: 'system', label: 'Sao lưu & Phiên bản', icon: RefreshCw },
+      { id: 'overview', label: 'Tổng quan', icon: HomeIcon, color: 'bg-slate-100 text-slate-700' },
+      { id: 'announcements', label: 'Thông báo', icon: Bell, color: 'bg-red-50 text-red-600' },
+      { id: 'news', label: 'Tin tức', icon: Newspaper, color: 'bg-emerald-50 text-emerald-700' },
+      { id: 'officials', label: 'Cán bộ', icon: Users, color: 'bg-sky-50 text-sky-700' },
+      { id: 'events', label: 'Lịch thôn', icon: Calendar, color: 'bg-teal-50 text-teal-700' },
+      { id: 'feedbacks', label: `Phản ánh (${feedbacks.filter(f => f.status === 'received').length})`, icon: MessageSquare, color: 'bg-amber-50 text-amber-700' },
+      { id: 'households', label: 'Hộ dân & Dân cư', icon: Shield, color: 'bg-indigo-50 text-indigo-700' },
+      { id: 'lists', label: 'Danh sách mở rộng', icon: ListPlus, color: 'bg-purple-50 text-purple-700' },
+      { id: 'qr', label: 'Mã QR & In ấn', icon: QrCode, color: 'bg-cyan-50 text-cyan-700' },
+      { id: 'system', label: 'Sao lưu & Phiên bản', icon: RefreshCw, color: 'bg-lime-50 text-lime-700' },
     ];
 
     return (
       <div className="min-h-screen bg-slate-100 flex flex-col md:flex-row">
         {toast && <div className="fixed top-4 right-4 z-50 bg-emerald-800 text-white px-5 py-3 rounded-xl shadow-lg no-print">{toast}</div>}
 
-        {/* Sidebar */}
+        {/* Sidebar: trên điện thoại hiển thị dạng lưới 2 cột gọn gàng để bấm luôn không cần kéo ngang */}
         <aside className="w-full md:w-64 bg-emerald-900 text-white p-4 flex flex-col no-print">
-          <div className="mb-6 pb-4 border-b border-emerald-800">
-            <h2 className="font-bold text-lg">QUẢN TRỊ AN SƠN</h2>
-            <p className="text-xs text-emerald-300 truncate">{session.user.email}</p>
+          <div className="mb-4 md:mb-6 pb-3 md:pb-4 border-b border-emerald-800 flex items-center justify-between md:block">
+            <div>
+              <h2 className="font-bold text-lg">QUẢN TRỊ AN SƠN</h2>
+              <p className="text-xs text-emerald-300 truncate">{session.user.email}</p>
+            </div>
+            <div className="flex gap-2 md:hidden">
+              <button onClick={() => setMode('public')} className="bg-emerald-800 hover:bg-emerald-700 px-3 py-1.5 rounded-lg text-xs font-medium">Trang dân</button>
+              <button onClick={handleLogout} className="bg-red-600/80 hover:bg-red-600 px-2.5 py-1.5 rounded-lg text-xs font-medium"><LogOut className="w-3.5 h-3.5" /></button>
+            </div>
           </div>
-          <nav className="flex-1 space-y-1 overflow-x-auto flex md:block gap-1">
+          <nav className="grid grid-cols-2 md:block gap-1.5 md:space-y-1 flex-1">
             {adminMenu.map(m => {
               const Icon = m.icon;
               return (
-                <button key={m.id} onClick={() => setAdminTab(m.id)} className={`flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm font-medium whitespace-nowrap w-full text-left transition ${adminTab === m.id ? 'bg-white text-emerald-900' : 'text-emerald-100 hover:bg-emerald-800'}`}>
-                  <Icon className="w-4 h-4 shrink-0" /> {m.label}
+                <button key={m.id} onClick={() => setAdminTab(m.id)} className={`flex items-center gap-2 px-3 py-2.5 rounded-xl text-xs md:text-sm font-medium w-full text-left transition ${adminTab === m.id ? 'bg-white text-emerald-900 shadow-sm font-bold' : 'text-emerald-100 hover:bg-emerald-800'}`}>
+                  <Icon className="w-4 h-4 shrink-0" /> <span className="truncate">{m.label}</span>
                 </button>
               );
             })}
           </nav>
-          <div className="mt-4 pt-4 border-t border-emerald-800 flex gap-2">
+          <div className="hidden md:flex mt-4 pt-4 border-t border-emerald-800 gap-2">
             <button onClick={() => setMode('public')} className="flex-1 bg-emerald-800 hover:bg-emerald-700 py-2 rounded-lg text-xs font-medium">Trang dân</button>
             <button onClick={handleLogout} className="flex items-center justify-center gap-1 bg-red-600/80 hover:bg-red-600 px-3 py-2 rounded-lg text-xs font-medium"><LogOut className="w-3.5 h-3.5" /> Thoát</button>
           </div>
@@ -339,25 +345,71 @@ export default function App() {
 
         {/* Main Admin Content */}
         <main className="flex-1 p-4 md:p-8 overflow-y-auto">
+          {adminTab !== 'overview' && (
+            <button
+              onClick={() => setAdminTab('overview')}
+              className="mb-4 inline-flex items-center gap-1.5 text-xs font-bold text-emerald-800 bg-emerald-100/80 hover:bg-emerald-200 px-3 py-1.5 rounded-xl transition no-print"
+            >
+              ← Quay về Tổng quan
+            </button>
+          )}
+
           {adminTab === 'overview' && (
             <div className="space-y-6">
               <h1 className="text-2xl font-bold text-slate-800">Tổng quan hệ thống Thôn An Sơn</h1>
+
+              {/* 4 thẻ thống kê bấm vào là nhảy thẳng tới mục tương ứng */}
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 {[
-                  { label: 'Thông báo', val: announcements.length, color: 'bg-emerald-600' },
-                  { label: 'Cán bộ, đoàn thể', val: officials.length, color: 'bg-sky-600' },
-                  { label: 'Hộ dân (Nội bộ)', val: households.length, color: 'bg-indigo-600' },
-                  { label: 'Phản ánh mới', val: feedbacks.filter(f => f.status === 'received').length, color: 'bg-amber-600' },
-                ].map((c, i) => (
-                  <div key={i} className={`${c.color} text-white p-5 rounded-2xl shadow`}>
-                    <div className="text-3xl font-bold">{c.val}</div>
-                    <div className="text-sm opacity-90 mt-1">{c.label}</div>
-                  </div>
+                  { id: 'announcements', label: 'Thông báo', val: announcements.length, color: 'bg-emerald-600 hover:bg-emerald-700' },
+                  { id: 'officials', label: 'Cán bộ, đoàn thể', val: officials.length, color: 'bg-sky-600 hover:bg-sky-700' },
+                  { id: 'households', label: 'Hộ dân (Nội bộ)', val: households.length, color: 'bg-indigo-600 hover:bg-indigo-700' },
+                  { id: 'feedbacks', label: 'Phản ánh mới', val: feedbacks.filter(f => f.status === 'received').length, color: 'bg-amber-600 hover:bg-amber-700' },
+                ].map((c) => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onClick={() => setAdminTab(c.id)}
+                    className={`${c.color} text-white p-5 rounded-2xl shadow text-left transition active:scale-[0.98] cursor-pointer group`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-3xl font-bold">{c.val}</span>
+                      <ChevronRight className="w-5 h-5 opacity-75 group-hover:translate-x-1 transition-transform" />
+                    </div>
+                    <div className="text-sm opacity-95 mt-1 font-medium">{c.label}</div>
+                  </button>
                 ))}
               </div>
+
+              {/* Lưới 9 ô chọn nhanh chức năng quản trị ngay giữa màn hình */}
+              <div className="bg-white p-5 md:p-6 rounded-2xl border shadow-sm space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-bold text-slate-800">Chọn nhanh mục quản lý (Bấm để mở ngay)</h3>
+                  <span className="text-xs text-slate-400">1 chạm mở trang</span>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                  {adminMenu.filter(m => m.id !== 'overview').map(m => {
+                    const Icon = m.icon;
+                    return (
+                      <button
+                        key={m.id}
+                        type="button"
+                        onClick={() => setAdminTab(m.id)}
+                        className="flex items-center gap-3 p-3.5 rounded-2xl border border-slate-200 hover:border-emerald-500 hover:bg-emerald-50/40 text-left transition active:scale-[0.98] cursor-pointer"
+                      >
+                        <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${m.color}`}>
+                          <Icon className="w-5 h-5" />
+                        </div>
+                        <span className="font-bold text-sm text-slate-800 leading-snug">{m.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
               <div className="bg-white p-6 rounded-2xl border shadow-sm">
                 <h3 className="font-bold text-slate-800 mb-2">Trạng thái bảo mật & Kết nối</h3>
-                <p className="text-sm text-emerald-700 flex items-center gap-2"><CheckCircle className="w-4 h-4" /> Đã kết nối cơ sở dữ liệu Supabase thời gian thực. Dữ liệu Hộ dân, Dân cư và Phản ánh được bảo vệ bằng Row Level Security (RLS).</p>
+                <p className="text-sm text-emerald-700 flex items-center gap-2"><CheckCircle className="w-4 h-4 shrink-0" /> Đã kết nối cơ sở dữ liệu Supabase thời gian thực. Dữ liệu Hộ dân, Dân cư và Phản ánh được bảo vệ bằng Row Level Security (RLS).</p>
               </div>
             </div>
           )}
