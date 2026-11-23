@@ -8,8 +8,11 @@ import {
 } from 'lucide-react';
 import { supabase, isConfigured } from './supabaseClient';
 
-const APP_VERSION = 'v1.3.0';
+const APP_VERSION = 'v1.4.0';
 const SEEN_IDS_KEY = 'thon_an_son_seen_post_ids_v1';
+const ONESIGNAL_APP_ID =
+  (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_ONESIGNAL_APP_ID) ||
+  'e21ec54f-f220-4014-a603-d9c0f23977ab';
 
 const QRImage = ({ url, size = 200 }) => {
   const src = `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encodeURIComponent(url)}`;
@@ -83,6 +86,33 @@ export default function App() {
     setToast(msg);
     setTimeout(() => setToast(''), 3500);
   };
+
+  // Nạp OneSignal SDK cho web / PWA
+  useEffect(() => {
+    if (typeof window === 'undefined' || !ONESIGNAL_APP_ID) return;
+    window.OneSignalDeferred = window.OneSignalDeferred || [];
+    window.OneSignalDeferred.push(async function (OneSignal) {
+      try {
+        await OneSignal.init({
+          appId: ONESIGNAL_APP_ID,
+          allowLocalhostAsSecureOrigin: true,
+        });
+        if (OneSignal.Notifications && OneSignal.Notifications.permission) {
+          setPushStatus('granted');
+        }
+      } catch (_err) {
+        // Ignore if already initialized
+      }
+    });
+
+    if (!document.getElementById('onesignal-sdk-script')) {
+      const script = document.createElement('script');
+      script.id = 'onesignal-sdk-script';
+      script.src = 'https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js';
+      script.defer = true;
+      document.head.appendChild(script);
+    }
+  }, []);
 
   const triggerBrowserAlert = (title, body, postParam) => {
     setToast(`${title}: ${body}`);
@@ -361,6 +391,20 @@ export default function App() {
   };
 
   const requestNotification = async () => {
+    if (typeof window !== 'undefined' && window.OneSignalDeferred) {
+      window.OneSignalDeferred.push(async function (OneSignal) {
+        try {
+          if (OneSignal.Slidedown && OneSignal.Slidedown.promptPush) {
+            await OneSignal.Slidedown.promptPush();
+          } else if (OneSignal.Notifications && OneSignal.Notifications.requestPermission) {
+            await OneSignal.Notifications.requestPermission();
+          }
+        } catch (_e) {
+          // Fallback below
+        }
+      });
+    }
+
     if (!('Notification' in window)) {
       showToast('Trình duyệt chưa hỗ trợ thông báo. Trên iPhone hãy bấm Thêm vào Màn hình chính trước.');
       return;
@@ -557,7 +601,7 @@ export default function App() {
 
               <div className="bg-white p-6 rounded-2xl border shadow-sm">
                 <h3 className="font-bold text-slate-800 mb-2">Trạng thái bảo mật & Kết nối</h3>
-                <p className="text-sm text-emerald-700 flex items-center gap-2"><CheckCircle className="w-4 h-4 shrink-0" /> Đã kết nối cơ sở dữ liệu Supabase thời gian thực. Dữ liệu Hộ dân, Dân cư và Phản ánh được bảo vệ bằng Row Level Security (RLS).</p>
+                <p className="text-sm text-emerald-700 flex items-center gap-2"><CheckCircle className="w-4 h-4 shrink-0" /> Đã kết nối cơ sở dữ liệu Supabase thời gian thực và OneSignal Push.</p>
               </div>
             </div>
           )}
