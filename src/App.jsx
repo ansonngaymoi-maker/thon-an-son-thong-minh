@@ -1,14 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import {
   Bell, Home, Newspaper, Users, Calendar, MessageSquare, QrCode,
-  Shield, Phone, MapPin, Plus, Trash2, Edit2, LogOut, Search,
+  Shield, Phone, MapPin, Plus, Trash2, LogOut, Search,
   CheckCircle, AlertTriangle, Download, Printer, ListPlus,
-  Home as HomeIcon, Lock, Eye, EyeOff, RefreshCw, Info, ChevronRight, X,
-  Image as ImageIcon
+  Home as HomeIcon, Lock, RefreshCw, Info, ChevronRight, X,
+  Image as ImageIcon, Map, PhoneCall, ExternalLink
 } from 'lucide-react';
 import { supabase, isConfigured } from './supabaseClient';
 
-const APP_VERSION = 'v1.1.0';
+const APP_VERSION = 'v1.2.0';
 
 const QRImage = ({ url, size = 200 }) => {
   const src = `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encodeURIComponent(url)}`;
@@ -45,7 +45,6 @@ export default function App() {
   // UI states
   const [searchOfficial, setSearchOfficial] = useState('');
   const [searchHousehold, setSearchHousehold] = useState('');
-  const [selectedListId, setSelectedListId] = useState(null);
   const [showQRModal, setShowQRModal] = useState(false);
   const [toast, setToast] = useState('');
   const [pushStatus, setPushStatus] = useState('idle');
@@ -262,12 +261,13 @@ export default function App() {
   }
 
   const todayStr = new Date().toLocaleDateString('vi-VN', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' });
+  const galleryItems = announcements.filter(a => a.image_url);
 
   // ==================== ADMIN VIEW ====================
   if (mode === 'admin') {
     if (!session) {
       return (
-        <div className="min-h-screen bg-gradient-to-br from-emerald-800 to-sky-900 flex items-center justify-center p-4">
+        <div className="min-h-screen bg-gradient-to-br from-emerald-800 to-teal-900 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-md">
             <div className="text-center mb-6">
               <div className="w-14 h-14 bg-emerald-100 text-emerald-700 rounded-2xl flex items-center justify-center mx-auto mb-3">
@@ -369,7 +369,6 @@ export default function App() {
                 <input required placeholder="Tiêu đề thông báo..." value={annForm.title} onChange={e => setAnnForm({ ...annForm, title: e.target.value })} className="w-full border px-4 py-2.5 rounded-xl" />
                 <textarea required rows={4} placeholder="Nội dung chi tiết..." value={annForm.content} onChange={e => setAnnForm({ ...annForm, content: e.target.value })} className="w-full border px-4 py-2.5 rounded-xl" />
 
-                {/* Chọn ảnh đính kèm */}
                 <div className="space-y-2">
                   <label className="inline-flex items-center gap-2 cursor-pointer bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-xl text-sm font-medium border border-slate-200 transition">
                     <ImageIcon className="w-4 h-4 text-emerald-700" />
@@ -533,7 +532,6 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Add Household */}
               <form onSubmit={async (e) => {
                 e.preventDefault();
                 const { error } = await supabase.from('households').insert([hhForm]);
@@ -551,7 +549,6 @@ export default function App() {
                 </div>
               </form>
 
-              {/* Add Resident */}
               <form onSubmit={async (e) => {
                 e.preventDefault();
                 const payload = { ...resForm, birth_year: resForm.birth_year ? Number(resForm.birth_year) : null, household_id: resForm.household_id || null };
@@ -699,88 +696,116 @@ export default function App() {
     );
   }
 
-  // ==================== PUBLIC RESIDENT VIEW ====================
+  // ==================== PUBLIC RESIDENT VIEW (PHƯƠNG ÁN 1) ====================
+  const menuGrid = [
+    { id: 'announcements', label: 'Thông báo', icon: Bell, iconColor: 'text-red-500', bgColor: 'bg-red-50' },
+    { id: 'news', label: 'Tin tức', icon: Newspaper, iconColor: 'text-emerald-600', bgColor: 'bg-emerald-50' },
+    { id: 'events', label: 'Lịch thôn', icon: Calendar, iconColor: 'text-sky-600', bgColor: 'bg-sky-50' },
+    { id: 'officials', label: 'Cán bộ', icon: Users, iconColor: 'text-indigo-600', bgColor: 'bg-indigo-50' },
+    { id: 'feedback', label: 'Phản ánh', icon: MessageSquare, iconColor: 'text-amber-500', bgColor: 'bg-amber-50' },
+    { id: 'map', label: 'Bản đồ', icon: MapPin, iconColor: 'text-teal-600', bgColor: 'bg-teal-50' },
+    { id: 'contact', label: 'Liên hệ', icon: PhoneCall, iconColor: 'text-blue-600', bgColor: 'bg-blue-50' },
+    { id: 'gallery', label: 'Thư viện ảnh', icon: ImageIcon, iconColor: 'text-purple-600', bgColor: 'bg-purple-50' },
+    { id: 'more', label: 'Mã QR', icon: QrCode, iconColor: 'text-slate-700', bgColor: 'bg-slate-100' },
+  ];
+
   return (
-    <div className="min-h-screen bg-slate-50 pb-24">
+    <div className="min-h-screen bg-[#f3f6f4] pb-24">
       {toast && <div className="fixed top-4 right-4 z-50 bg-emerald-800 text-white px-5 py-3 rounded-xl shadow-lg">{toast}</div>}
 
-      {/* Header */}
-      <header className="bg-gradient-to-r from-emerald-700 via-emerald-600 to-sky-700 text-white shadow-md">
-        <div className="max-w-4xl mx-auto px-4 py-5">
-          <div className="flex justify-between items-center mb-3">
-            <span className="text-xs bg-white/20 px-3 py-1 rounded-full capitalize">{todayStr}</span>
+      {/* Header xanh ngọc bo góc dưới theo Phương án 1 */}
+      <header className="bg-gradient-to-br from-emerald-700 via-emerald-600 to-teal-700 text-white rounded-b-3xl shadow-md">
+        <div className="max-w-2xl mx-auto px-4 pt-4 pb-6">
+          <div className="flex justify-between items-center mb-4">
+            <span className="text-[11px] bg-white/15 backdrop-blur-sm px-3 py-1 rounded-full capitalize font-medium">{todayStr}</span>
             <div className="flex items-center gap-2">
-              <button onClick={() => setShowQRModal(true)} className="bg-white/20 hover:bg-white/30 p-2 rounded-xl" title="Mã QR chia sẻ"><QrCode className="w-5 h-5" /></button>
-              <button onClick={() => setMode('admin')} className="bg-white/20 hover:bg-white/30 px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5"><Lock className="w-3.5 h-3.5" /> Ban quản trị</button>
+              <button onClick={() => setShowQRModal(true)} className="bg-white/15 hover:bg-white/25 p-2 rounded-xl transition" title="Mã QR chia sẻ">
+                <QrCode className="w-4 h-4" />
+              </button>
+              <button onClick={() => setMode('admin')} className="bg-white/15 hover:bg-white/25 px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition">
+                <Lock className="w-3.5 h-3.5" /> Quản trị
+              </button>
             </div>
           </div>
-          <div className="flex items-center gap-3">
-            <img src="/icon.svg" alt="Logo" className="w-14 h-14 rounded-2xl shadow" />
+          <div className="flex items-center gap-3.5">
+            <img src="/icon.svg" alt="Logo Thôn An Sơn" className="w-14 h-14 rounded-2xl shadow-md bg-white/10 p-1" />
             <div>
-              <h1 className="text-xl md:text-2xl font-extrabold tracking-tight">THÔN AN SƠN</h1>
-              <p className="text-xs md:text-sm text-emerald-100 font-medium">XÃ CAM LỘ – TỈNH QUẢNG TRỊ</p>
+              <h1 className="text-2xl font-extrabold tracking-tight leading-tight">THÔN AN SƠN</h1>
+              <p className="text-xs sm:text-sm text-emerald-100 font-medium mt-0.5">Xã Cam Lộ – Tỉnh Quảng Trị</p>
             </div>
           </div>
         </div>
       </header>
 
-      <main className="max-w-4xl mx-auto px-4 py-5 space-y-6">
+      <main className="max-w-2xl mx-auto px-4 py-5 space-y-5">
         {tab === 'home' && (
           <>
-            {/* Welcome Card */}
-            <div className="bg-white rounded-2xl p-5 shadow-sm border border-emerald-100">
-              <h2 className="text-lg font-bold text-emerald-800">CHÀO MỪNG BÀ CON ĐẾN VỚI THÔN AN SƠN</h2>
-              <p className="text-sm text-slate-600 mt-1">Thông tin nhanh chóng – Kết nối cộng đồng – Chung tay xây dựng quê hương.</p>
-              <button onClick={requestNotification} className="mt-4 w-full sm:w-auto bg-emerald-700 hover:bg-emerald-800 text-white px-5 py-2.5 rounded-xl text-sm font-semibold flex items-center justify-center gap-2 shadow-sm">
-                <Bell className="w-4 h-4" /> {pushStatus === 'granted' ? 'Đã bật thông báo từ thôn' : 'ĐĂNG KÝ NHẬN THÔNG BÁO TỪ THÔN'}
-              </button>
-            </div>
-
-            {/* Big Icon Grid */}
-            <div className="grid grid-cols-3 sm:grid-cols-6 gap-3">
-              {[
-                { id: 'announcements', label: 'Thông báo', icon: Bell, color: 'bg-red-50 text-red-600' },
-                { id: 'news', label: 'Tin tức', icon: Newspaper, color: 'bg-emerald-50 text-emerald-700' },
-                { id: 'events', label: 'Lịch thôn', icon: Calendar, color: 'bg-sky-50 text-sky-700' },
-                { id: 'officials', label: 'Cán bộ', icon: Users, color: 'bg-indigo-50 text-indigo-700' },
-                { id: 'feedback', label: 'Phản ánh', icon: MessageSquare, color: 'bg-amber-50 text-amber-700' },
-                { id: 'more', label: 'Khác & QR', icon: Info, color: 'bg-teal-50 text-teal-700' },
-              ].map(item => {
+            {/* Lưới 9 chức năng 3x3 */}
+            <div className="grid grid-cols-3 gap-3 sm:gap-4">
+              {menuGrid.map(item => {
                 const Icon = item.icon;
                 return (
-                  <button key={item.id} onClick={() => setTab(item.id)} className="bg-white p-3.5 rounded-2xl border border-slate-100 shadow-sm hover:shadow flex flex-col items-center gap-2 transition">
-                    <div className={`w-11 h-11 rounded-xl flex items-center justify-center ${item.color}`}><Icon className="w-6 h-6" /></div>
-                    <span className="text-xs font-semibold text-slate-700 text-center">{item.label}</span>
+                  <button
+                    key={item.id}
+                    onClick={() => setTab(item.id)}
+                    className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 hover:border-emerald-200 hover:shadow-md active:scale-[0.98] flex flex-col items-center justify-center gap-2.5 transition"
+                  >
+                    <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${item.bgColor}`}>
+                      <Icon className={`w-6 h-6 ${item.iconColor}`} />
+                    </div>
+                    <span className="text-xs sm:text-sm font-bold text-slate-800 text-center leading-tight">{item.label}</span>
                   </button>
                 );
               })}
             </div>
 
-            {/* Latest Announcements */}
-            <section className="space-y-3">
-              <div className="flex justify-between items-center">
-                <h3 className="font-bold text-lg text-slate-800">Thông báo mới nhất</h3>
-                <button onClick={() => setTab('announcements')} className="text-sm text-emerald-700 font-medium flex items-center">Xem tất cả <ChevronRight className="w-4 h-4" /></button>
+            {/* Thẻ Tin mới nhất / Thông báo nổi bật ngay dưới lưới */}
+            <section className="space-y-3 pt-1">
+              <div className="flex justify-between items-center px-1">
+                <h2 className="text-xs font-extrabold uppercase tracking-wider text-slate-500">Tin mới nhất</h2>
+                <button onClick={() => setTab('announcements')} className="text-xs text-emerald-700 font-bold flex items-center hover:underline">
+                  Xem tất cả <ChevronRight className="w-4 h-4" />
+                </button>
               </div>
-              {loading ? <p className="text-sm text-slate-500">Đang tải dữ liệu...</p> : announcements.length === 0 ? (
-                <div className="bg-white p-6 rounded-2xl border text-center text-slate-500 text-sm">Chưa có thông báo mới. Ban thôn sẽ cập nhật sớm!</div>
-              ) : announcements.slice(0, 3).map(a => (
-                <div key={a.id} className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
-                  <div className="flex items-center gap-2 mb-1">
-                    {a.is_pinned && <span className="text-xs bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full font-semibold">Ghim</span>}
-                    {a.priority === 'urgent' && <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-semibold">Khẩn cấp</span>}
-                    <span className="text-xs text-slate-400">{new Date(a.created_at).toLocaleDateString('vi-VN')}</span>
-                  </div>
-                  <h4 className="font-bold text-slate-800">{a.title}</h4>
-                  <p className="text-sm text-slate-600 mt-1 whitespace-pre-line">{a.content}</p>
-                  {a.image_url && (
-                    <a href={a.image_url} target="_blank" rel="noreferrer" className="block mt-3">
-                      <img src={a.image_url} alt={a.title} className="w-full max-h-80 object-contain rounded-xl border border-slate-100 bg-slate-50" />
-                    </a>
-                  )}
+
+              {loading ? (
+                <div className="bg-white p-5 rounded-2xl border border-slate-100 text-sm text-slate-500 text-center">Đang tải thông tin thôn...</div>
+              ) : announcements.length === 0 ? (
+                <div className="bg-white p-5 rounded-2xl border border-slate-100 text-center space-y-2">
+                  <p className="text-sm font-semibold text-slate-700">Chào mừng bà con đến với cổng thông tin Thôn An Sơn</p>
+                  <p className="text-xs text-slate-500">Chưa có thông báo mới. Ban thôn sẽ cập nhật kịp thời tại đây.</p>
                 </div>
-              ))}
+              ) : (
+                announcements.slice(0, 3).map(a => (
+                  <div key={a.id} className="bg-white p-4 rounded-2xl border-l-4 border-l-emerald-600 border border-slate-100 shadow-sm space-y-1.5">
+                    <div className="flex items-center gap-2">
+                      {a.is_pinned && <span className="text-[11px] bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full font-bold">Ghim</span>}
+                      {a.priority === 'urgent' && <span className="text-[11px] bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-bold">Khẩn cấp</span>}
+                      <span className="text-xs font-bold text-emerald-700">Thông báo thôn</span>
+                      <span className="text-[11px] text-slate-400 ml-auto">{new Date(a.created_at).toLocaleDateString('vi-VN')}</span>
+                    </div>
+                    <h3 className="font-bold text-slate-800 text-base leading-snug">{a.title}</h3>
+                    <p className="text-sm text-slate-600 line-clamp-3 whitespace-pre-line">{a.content}</p>
+                    {a.image_url && (
+                      <a href={a.image_url} target="_blank" rel="noreferrer" className="block pt-1">
+                        <img src={a.image_url} alt={a.title} className="w-full max-h-64 object-contain rounded-xl border border-slate-100 bg-slate-50" />
+                      </a>
+                    )}
+                  </div>
+                ))
+              )}
             </section>
+
+            {/* Nút đăng ký nhận thông báo gọn nhẹ */}
+            <div className="bg-white rounded-2xl p-4 border border-emerald-100 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <div className="text-sm font-bold text-slate-800">Nhận tin báo nhanh từ Ban thôn</div>
+                <div className="text-xs text-slate-500">Cập nhật lịch họp, thông báo khẩn của thôn An Sơn</div>
+              </div>
+              <button onClick={requestNotification} className="bg-emerald-700 hover:bg-emerald-800 text-white px-4 py-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shrink-0">
+                <Bell className="w-4 h-4" /> {pushStatus === 'granted' ? 'Đã bật thông báo' : 'Bật thông báo'}
+              </button>
+            </div>
           </>
         )}
 
@@ -789,7 +814,7 @@ export default function App() {
             <h2 className="text-xl font-bold text-slate-800">Thông báo Thôn An Sơn</h2>
             {announcements.length === 0 && <p className="text-slate-500 text-sm">Chưa có thông báo nào.</p>}
             {announcements.map(a => (
-              <div key={a.id} className="bg-white p-5 rounded-2xl border shadow-sm">
+              <div key={a.id} className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm">
                 <div className="text-xs text-slate-400 mb-1">{a.is_pinned ? '📌 Đã ghim • ' : ''}{new Date(a.created_at).toLocaleDateString('vi-VN')}</div>
                 <h3 className="font-bold text-lg text-slate-800">{a.title}</h3>
                 <p className="text-slate-600 mt-2 whitespace-pre-line">{a.content}</p>
@@ -808,9 +833,9 @@ export default function App() {
             <h2 className="text-xl font-bold text-slate-800">Tin tức & Hoạt động cộng đồng</h2>
             {news.length === 0 && <p className="text-slate-500 text-sm">Chưa có bài viết nào.</p>}
             {news.map(n => (
-              <div key={n.id} className="bg-white p-5 rounded-2xl border shadow-sm">
+              <div key={n.id} className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm">
                 <span className="text-xs bg-emerald-100 text-emerald-800 px-2.5 py-0.5 rounded-full font-medium">{n.category}</span>
-                <h3 className="font-bold text-lg mt-2">{n.title}</h3>
+                <h3 className="font-bold text-lg mt-2 text-slate-800">{n.title}</h3>
                 <p className="text-slate-600 mt-2 whitespace-pre-line">{n.content}</p>
                 {n.video_url && <a href={n.video_url} target="_blank" rel="noreferrer" className="inline-block mt-3 text-sm text-sky-700 font-semibold underline">▶ Xem video hoạt động</a>}
               </div>
@@ -823,11 +848,11 @@ export default function App() {
             <h2 className="text-xl font-bold text-slate-800">Danh sách Cán bộ, Đoàn thể Thôn An Sơn</h2>
             <div className="relative">
               <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
-              <input placeholder="Tìm theo tên hoặc chức vụ..." value={searchOfficial} onChange={e => setSearchOfficial(e.target.value)} className="w-full bg-white border pl-10 pr-4 py-2.5 rounded-xl text-sm" />
+              <input placeholder="Tìm theo tên hoặc chức vụ..." value={searchOfficial} onChange={e => setSearchOfficial(e.target.value)} className="w-full bg-white border border-slate-200 pl-10 pr-4 py-2.5 rounded-xl text-sm" />
             </div>
             <div className="grid sm:grid-cols-2 gap-3">
               {officials.filter(o => (o.full_name + o.role).toLowerCase().includes(searchOfficial.toLowerCase())).map(o => (
-                <div key={o.id} className="bg-white p-4 rounded-2xl border shadow-sm flex justify-between items-center gap-3">
+                <div key={o.id} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm flex justify-between items-center gap-3">
                   <div>
                     <div className="font-bold text-slate-800">{o.full_name}</div>
                     <div className="text-sm text-emerald-700 font-medium">{o.role}</div>
@@ -849,7 +874,7 @@ export default function App() {
             <h2 className="text-xl font-bold text-slate-800">Lịch sinh hoạt cộng đồng</h2>
             {events.length === 0 && <p className="text-slate-500 text-sm">Chưa có lịch sinh hoạt sắp tới.</p>}
             {events.map(ev => (
-              <div key={ev.id} className="bg-white p-4 rounded-2xl border shadow-sm flex gap-4 items-center">
+              <div key={ev.id} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm flex gap-4 items-center">
                 <div className="bg-emerald-100 text-emerald-800 px-3 py-2 rounded-xl text-center min-w-[76px]">
                   <div className="text-xs font-semibold">{ev.event_date}</div>
                   <div className="text-sm font-bold">{ev.event_time}</div>
@@ -864,7 +889,7 @@ export default function App() {
         )}
 
         {tab === 'feedback' && (
-          <div className="bg-white p-6 rounded-2xl border shadow-sm space-y-4">
+          <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm space-y-4">
             <h2 className="text-xl font-bold text-slate-800">Gửi Phản ánh & Góp ý</h2>
             <p className="text-sm text-slate-500">Không cần đăng nhập. Mọi thông tin cá nhân và phản ánh của bà con được bảo mật, chỉ Ban thôn tiếp nhận xử lý.</p>
             <form onSubmit={handleFeedbackSubmit} className="space-y-3">
@@ -886,9 +911,110 @@ export default function App() {
           </div>
         )}
 
+        {tab === 'map' && (
+          <div className="space-y-4">
+            <h2 className="text-xl font-bold text-slate-800">Bản đồ & Địa điểm Thôn An Sơn</h2>
+            <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm space-y-3">
+              <div className="overflow-hidden rounded-xl border border-slate-200">
+                <iframe
+                  title="Bản đồ Thôn An Sơn, xã Cam Lộ"
+                  src="https://maps.google.com/maps?q=Th%C3%B4n%20An%20S%C6%A1n,%20Cam%20L%E1%BB%99,%20Qu%E1%BA%A3ng%20Tr%E1%BB%8B&t=&z=14&ie=UTF8&iwloc=&output=embed"
+                  className="w-full h-72 border-0"
+                  loading="lazy"
+                />
+              </div>
+              <div className="space-y-2 pt-1">
+                <div className="font-bold text-slate-800 flex items-center gap-2"><MapPin className="w-4 h-4 text-emerald-700" /> Nhà văn hóa & Trung tâm Văn hóa Thôn An Sơn</div>
+                <p className="text-xs text-slate-500">Địa chỉ: Thôn An Sơn, xã Cam Lộ, tỉnh Quảng Trị</p>
+                <a
+                  href="https://www.google.com/maps/search/?api=1&query=Th%C3%B4n+An+S%C6%A1n+Cam+L%E1%BB%99+Qu%E1%BA%A3ng+Tr%E1%BB%8B"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white px-4 py-2.5 rounded-xl text-xs font-bold"
+                >
+                   Mở chỉ đường trên Google Maps <ExternalLink className="w-3.5 h-3.5" />
+                </a>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {tab === 'contact' && (
+          <div className="space-y-4">
+            <h2 className="text-xl font-bold text-slate-800">Liên hệ nhanh & Số khẩn cấp</h2>
+            <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-3">
+              <h3 className="font-bold text-emerald-800 text-sm uppercase">Ban quản lý & Tổ ANTT Thôn An Sơn</h3>
+              {officials.length === 0 ? (
+                <p className="text-sm text-slate-500">Xem danh bạ chi tiết trong mục Cán bộ.</p>
+              ) : (
+                <div className="divide-y">
+                  {officials.map(o => (
+                    <div key={o.id} className="py-2.5 flex justify-between items-center">
+                      <div>
+                        <div className="font-bold text-slate-800 text-sm">{o.full_name}</div>
+                        <div className="text-xs text-slate-500">{o.role}</div>
+                      </div>
+                      {o.phone && (
+                        <a href={`tel:${o.phone.replace(/\s+/g, '')}`} className="bg-emerald-50 text-emerald-700 hover:bg-emerald-100 px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5">
+                          <Phone className="w-3.5 h-3.5" /> {o.phone}
+                        </a>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-3">
+              <h3 className="font-bold text-red-700 text-sm uppercase">Đường dây nóng khẩn cấp toàn quốc</h3>
+              <div className="grid grid-cols-3 gap-2.5 text-center">
+                {[
+                  { label: 'Công an', num: '113' },
+                  { label: 'Cứu hỏa', num: '114' },
+                  { label: 'Cấp cứu', num: '115' },
+                ].map(em => (
+                  <a key={em.num} href={`tel:${em.num}`} className="bg-red-50 hover:bg-red-100 border border-red-100 p-3 rounded-xl">
+                    <div className="text-lg font-extrabold text-red-600">{em.num}</div>
+                    <div className="text-xs font-semibold text-slate-700">{em.label}</div>
+                  </a>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {tab === 'gallery' && (
+          <div className="space-y-4">
+            <h2 className="text-xl font-bold text-slate-800">Thư viện ảnh hoạt động Thôn An Sơn</h2>
+            {galleryItems.length === 0 ? (
+              <div className="bg-white p-6 rounded-2xl border border-slate-100 text-center text-sm text-slate-500">
+                Chưa có hình ảnh nào được đăng tải. Hình ảnh đính kèm trong các thông báo của thôn sẽ tự động hiển thị tại đây.
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {galleryItems.map(item => (
+                  <a key={item.id} href={item.image_url} target="_blank" rel="noreferrer" className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden group">
+                    <img src={item.image_url} alt={item.title} className="w-full h-52 object-cover group-hover:scale-[1.02] transition" />
+                    <div className="p-3">
+                      <div className="font-bold text-sm text-slate-800 line-clamp-1">{item.title}</div>
+                      <div className="text-[11px] text-slate-400 mt-0.5">{new Date(item.created_at).toLocaleDateString('vi-VN')}</div>
+                    </div>
+                  </a>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {tab === 'more' && (
           <div className="space-y-5">
-            <div className="bg-white p-5 rounded-2xl border shadow-sm">
+            <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm text-center space-y-3">
+              <h3 className="font-bold text-lg text-slate-800">Mã QR truy cập nhanh</h3>
+              <QRImage url={siteUrl} size={200} />
+              <p className="text-xs text-slate-500">Đưa mã này cho bà con quét bằng Zalo hoặc Camera điện thoại để mở ngay ứng dụng Thôn An Sơn.</p>
+            </div>
+
+            <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm">
               <h3 className="font-bold text-lg text-slate-800 mb-2">Danh sách công khai của thôn</h3>
               {customLists.filter(l => l.is_public).length === 0 ? (
                 <p className="text-sm text-slate-500">Chưa có danh sách công khai nào được đăng tải.</p>
@@ -903,17 +1029,11 @@ export default function App() {
                 </div>
               ))}
             </div>
-
-            <div className="bg-white p-5 rounded-2xl border shadow-sm text-center space-y-3">
-              <h3 className="font-bold text-lg text-slate-800">Mã QR truy cập nhanh</h3>
-              <QRImage url={siteUrl} size={200} />
-              <p className="text-xs text-slate-500">Đưa mã này cho bà con quét bằng Zalo hoặc Camera điện thoại để mở ngay ứng dụng Thôn An Sơn.</p>
-            </div>
           </div>
         )}
       </main>
 
-      {/* Mobile Bottom Navigation */}
+      {/* Thanh điều hướng dưới cùng trên điện thoại */}
       <nav className="fixed bottom-0 inset-x-0 bg-white border-t border-slate-200 flex justify-around py-2 z-40">
         {[
           { id: 'home', label: 'Trang chủ', icon: Home },
