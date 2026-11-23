@@ -1,14 +1,15 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Bell, Home, Newspaper, Users, Calendar, MessageSquare, QrCode,
   Shield, Phone, MapPin, Plus, Trash2, LogOut, Search,
   CheckCircle, AlertTriangle, Download, Printer, ListPlus,
-  Home as HomeIcon, Lock, RefreshCw, Info, ChevronRight, X,
-  Image as ImageIcon, Map, PhoneCall, ExternalLink
+  Home as HomeIcon, Lock, RefreshCw, ChevronRight, X,
+  Image as ImageIcon, Map, PhoneCall, ExternalLink, Copy, Check
 } from 'lucide-react';
 import { supabase, isConfigured } from './supabaseClient';
 
-const APP_VERSION = 'v1.2.1';
+const APP_VERSION = 'v1.3.0';
+const SEEN_IDS_KEY = 'thon_an_son_seen_post_ids_v1';
 
 const QRImage = ({ url, size = 200 }) => {
   const src = `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encodeURIComponent(url)}`;
@@ -47,7 +48,16 @@ export default function App() {
   const [searchHousehold, setSearchHousehold] = useState('');
   const [showQRModal, setShowQRModal] = useState(false);
   const [toast, setToast] = useState('');
-  const [pushStatus, setPushStatus] = useState('idle');
+  const [copiedKey, setCopiedKey] = useState('');
+  const [highlightedPost, setHighlightedPost] = useState('');
+  const [pushStatus, setPushStatus] = useState(() => {
+    if (typeof window !== 'undefined' && 'Notification' in window) {
+      return Notification.permission;
+    }
+    return 'idle';
+  });
+
+  const hasInitializedFeedRef = useRef(false);
 
   // Announcement image upload states
   const [annImageFile, setAnnImageFile] = useState(null);
@@ -74,6 +84,75 @@ export default function App() {
     setTimeout(() => setToast(''), 3500);
   };
 
+  const triggerBrowserAlert = (title, body, postParam) => {
+    setToast(`${title}: ${body}`);
+    setTimeout(() => setToast(''), 5000);
+
+    if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+      try {
+        const n = new Notification(title, {
+          body,
+          icon: '/icon.svg',
+          badge: '/icon.svg',
+          tag: postParam || 'thon-an-son-update',
+        });
+        n.onclick = () => {
+          window.focus();
+          if (postParam) openPostFromKey(postParam);
+        };
+      } catch (_err) {
+        // Fallback already shown via toast
+      }
+    }
+  };
+
+  const openPostFromKey = (postKey) => {
+    if (!postKey) return;
+    setMode('public');
+    setHighlightedPost(postKey);
+    if (postKey.startsWith('announcements-')) {
+      setTab('announcements');
+    } else if (postKey.startsWith('news-')) {
+      setTab('news');
+    }
+    setTimeout(() => {
+      const el = document.getElementById(`post-${postKey}`);
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 150);
+  };
+
+  const getPostShareUrl = (type, id) => {
+    const base = typeof window !== 'undefined' ? `${window.location.origin}${window.location.pathname}` : '';
+    return `${base}?post=${type}-${id}`;
+  };
+
+  const handleCopyPostLink = async (type, item) => {
+    const shareUrl = getPostShareUrl(type, item.id);
+    const key = `${type}-${item.id}`;
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+    } catch (_err) {
+      const temp = document.createElement('input');
+      temp.value = shareUrl;
+      document.body.appendChild(temp);
+      temp.select();
+      document.execCommand('copy');
+      document.body.removeChild(temp);
+    }
+    setCopiedKey(key);
+    showToast('Đã sao chép link bài viết để gửi nhóm Zalo!');
+    setTimeout(() => setCopiedKey(''), 2500);
+  };
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    const postParam = params.get('post');
+    if (postParam) {
+      openPostFromKey(postParam);
+    }
+  }, []);
+
   useEffect(() => {
     if (!isConfigured) {
       setLoading(false);
@@ -86,7 +165,37 @@ export default function App() {
       setSession(sess);
     });
     fetchPublicData();
-    return () => listener.subscription.unsubscribe();
+
+    const channel = supabase
+      .channel('thon-an-son-live-updates')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'announcements' }, (payload) => {
+        const row = payload.new;
+        fetchPublicData();
+        if (row) {
+          triggerBrowserAlert(
+            'Thông báo mới – Thôn An Sơn',
+            row.title || 'Có thông báo mới vừa được đăng tải.',
+            `announcements-${row.id}`
+          );
+        }
+      })
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'news' }, (payload) => {
+        const row = payload.new;
+        fetchPublicData();
+        if (row) {
+          triggerBrowserAlert(
+            'Tin tức mới – Thôn An Sơn',
+            row.title || 'Có tin tức mới vừa được cập nhật.',
+            `news-${row.id}`
+          );
+        }
+      })
+      .subscribe();
+
+    return () => {
+      listener.subscription.unsubscribe();
+      supabase.removeChannel(channel);
+    };
   }, []);
 
   useEffect(() => {
@@ -94,6 +203,46 @@ export default function App() {
       fetchAdminData();
     }
   }, [session]);
+
+  const checkNewPostsSinceLastVisit = (annRows, newsRows) => {
+    if (typeof window === 'undefined') return;
+    const currentKeys = [
+      ...(annRows || []).map((r) => `announcements-${r.id}`),
+      ...(newsRows || []).map((r) => `news-${r.id}`),
+    ];
+    let seenList = [];
+    try {
+      seenList = JSON.parse(localStorage.getItem(SEEN_IDS_KEY) || '[]');
+    } catch (_e) {
+      seenList = [];
+    }
+
+    if (!hasInitializedFeedRef.current) {
+      hasInitializedFeedRef.current = true;
+      if (seenList.length > 0 && Notification.permission === 'granted') {
+        const newestAnn = (annRows || []).find((r) => !seenList.includes(`announcements-${r.id}`));
+        const newestNews = (newsRows || []).find((r) => !seenList.includes(`news-${r.id}`));
+        if (newestAnn) {
+          triggerBrowserAlert(
+            'Thông báo mới – Thôn An Sơn',
+            newestAnn.title || 'Có thông báo mới cho bà con.',
+            `announcements-${newestAnn.id}`
+          );
+        } else if (newestNews) {
+          triggerBrowserAlert(
+            'Tin tức mới – Thôn An Sơn',
+            newestNews.title || 'Có bài tin tức mới vừa đăng.',
+            `news-${newestNews.id}`
+          );
+        }
+      }
+      if (currentKeys.length > 0) {
+        localStorage.setItem(SEEN_IDS_KEY, JSON.stringify(currentKeys.slice(0, 100)));
+      }
+    } else if (currentKeys.length > 0) {
+      localStorage.setItem(SEEN_IDS_KEY, JSON.stringify(currentKeys.slice(0, 100)));
+    }
+  };
 
   const fetchPublicData = async () => {
     setLoading(true);
@@ -106,12 +255,15 @@ export default function App() {
         supabase.from('custom_lists').select('*').order('created_at', { ascending: false }),
         supabase.from('custom_list_items').select('*').order('created_at', { ascending: true }),
       ]);
-      if (a.data) setAnnouncements(a.data);
-      if (n.data) setNews(n.data);
+      const annRows = a.data || [];
+      const newsRows = n.data || [];
+      if (a.data) setAnnouncements(annRows);
+      if (n.data) setNews(newsRows);
       if (o.data) setOfficials(o.data);
       if (e.data) setEvents(e.data);
       if (cl.data) setCustomLists(cl.data);
       if (ci.data) setCustomItems(ci.data);
+      checkNewPostsSinceLastVisit(annRows, newsRows);
     } finally {
       setLoading(false);
     }
@@ -210,15 +362,15 @@ export default function App() {
 
   const requestNotification = async () => {
     if (!('Notification' in window)) {
-      showToast('Trình duyệt chưa hỗ trợ thông báo đẩy. Trên iPhone hãy thêm ra Màn hình chính trước.');
+      showToast('Trình duyệt chưa hỗ trợ thông báo. Trên iPhone hãy bấm Thêm vào Màn hình chính trước.');
       return;
     }
     const perm = await Notification.requestPermission();
+    setPushStatus(perm);
     if (perm === 'granted') {
-      setPushStatus('granted');
-      showToast('Đã bật quyền nhận thông báo từ Thôn An Sơn!');
+      showToast('Đã bật thông báo! Mỗi khi có thông báo hoặc tin tức mới, máy sẽ báo ngay.');
     } else {
-      showToast('Bạn đã từ chối quyền thông báo.');
+      showToast('Bạn chưa cấp quyền thông báo trên thiết bị.');
     }
   };
 
@@ -315,7 +467,6 @@ export default function App() {
       <div className="min-h-screen bg-slate-100 flex flex-col md:flex-row">
         {toast && <div className="fixed top-4 right-4 z-50 bg-emerald-800 text-white px-5 py-3 rounded-xl shadow-lg no-print">{toast}</div>}
 
-        {/* Sidebar: trên điện thoại hiển thị dạng lưới 2 cột gọn gàng để bấm luôn không cần kéo ngang */}
         <aside className="w-full md:w-64 bg-emerald-900 text-white p-4 flex flex-col no-print">
           <div className="mb-4 md:mb-6 pb-3 md:pb-4 border-b border-emerald-800 flex items-center justify-between md:block">
             <div>
@@ -343,7 +494,6 @@ export default function App() {
           </div>
         </aside>
 
-        {/* Main Admin Content */}
         <main className="flex-1 p-4 md:p-8 overflow-y-auto">
           {adminTab !== 'overview' && (
             <button
@@ -358,7 +508,6 @@ export default function App() {
             <div className="space-y-6">
               <h1 className="text-2xl font-bold text-slate-800">Tổng quan hệ thống Thôn An Sơn</h1>
 
-              {/* 4 thẻ thống kê bấm vào là nhảy thẳng tới mục tương ứng */}
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 {[
                   { id: 'announcements', label: 'Thông báo', val: announcements.length, color: 'bg-emerald-600 hover:bg-emerald-700' },
@@ -381,7 +530,6 @@ export default function App() {
                 ))}
               </div>
 
-              {/* Lưới 9 ô chọn nhanh chức năng quản trị ngay giữa màn hình */}
               <div className="bg-white p-5 md:p-6 rounded-2xl border shadow-sm space-y-4">
                 <div className="flex items-center justify-between">
                   <h3 className="font-bold text-slate-800">Chọn nhanh mục quản lý (Bấm để mở ngay)</h3>
@@ -462,6 +610,14 @@ export default function App() {
                           <img src={a.image_url} alt={a.title} className="max-h-56 rounded-xl border border-slate-200 object-cover mt-2" />
                         </a>
                       )}
+                      <button
+                        type="button"
+                        onClick={() => handleCopyPostLink('announcements', a)}
+                        className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 rounded-lg transition"
+                      >
+                        {copiedKey === `announcements-${a.id}` ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                        {copiedKey === `announcements-${a.id}` ? 'Đã sao chép link Zalo' : 'Sao chép link gửi Zalo'}
+                      </button>
                     </div>
                     <button onClick={async () => { if (confirm('Xóa thông báo này?')) { await supabase.from('announcements').delete().eq('id', a.id); fetchPublicData(); } }} className="text-red-500 hover:bg-red-50 p-2 rounded-lg"><Trash2 className="w-4 h-4" /></button>
                   </div>
@@ -486,8 +642,19 @@ export default function App() {
               </form>
               <div className="space-y-3">
                 {news.map(n => (
-                  <div key={n.id} className="bg-white p-4 rounded-xl border flex justify-between items-start">
-                    <div><div className="font-bold">{n.title}</div><p className="text-sm text-slate-600 mt-1">{n.content}</p></div>
+                  <div key={n.id} className="bg-white p-4 rounded-xl border flex justify-between items-start gap-4">
+                    <div className="space-y-2 flex-1">
+                      <div className="font-bold">{n.title}</div>
+                      <p className="text-sm text-slate-600">{n.content}</p>
+                      <button
+                        type="button"
+                        onClick={() => handleCopyPostLink('news', n)}
+                        className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 rounded-lg transition"
+                      >
+                        {copiedKey === `news-${n.id}` ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                        {copiedKey === `news-${n.id}` ? 'Đã sao chép link Zalo' : 'Sao chép link gửi Zalo'}
+                      </button>
+                    </div>
                     <button onClick={async () => { if (confirm('Xóa bài viết?')) { await supabase.from('news').delete().eq('id', n.id); fetchPublicData(); } }} className="text-red-500 p-2"><Trash2 className="w-4 h-4" /></button>
                   </div>
                 ))}
@@ -748,7 +915,7 @@ export default function App() {
     );
   }
 
-  // ==================== PUBLIC RESIDENT VIEW (PHƯƠNG ÁN 1) ====================
+  // ==================== PUBLIC RESIDENT VIEW ====================
   const menuGrid = [
     { id: 'announcements', label: 'Thông báo', icon: Bell, iconColor: 'text-red-500', bgColor: 'bg-red-50' },
     { id: 'news', label: 'Tin tức', icon: Newspaper, iconColor: 'text-emerald-600', bgColor: 'bg-emerald-50' },
@@ -763,9 +930,12 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#f3f6f4] pb-24">
-      {toast && <div className="fixed top-4 right-4 z-50 bg-emerald-800 text-white px-5 py-3 rounded-xl shadow-lg">{toast}</div>}
+      {toast && (
+        <div className="fixed top-4 right-4 z-50 bg-emerald-800 text-white px-4 py-3 rounded-xl shadow-lg max-w-sm text-sm font-medium">
+          {toast}
+        </div>
+      )}
 
-      {/* Header xanh ngọc bo góc dưới theo Phương án 1 */}
       <header className="bg-gradient-to-br from-emerald-700 via-emerald-600 to-teal-700 text-white rounded-b-3xl shadow-md">
         <div className="max-w-2xl mx-auto px-4 pt-4 pb-6">
           <div className="flex justify-between items-center mb-4">
@@ -792,7 +962,6 @@ export default function App() {
       <main className="max-w-2xl mx-auto px-4 py-5 space-y-5">
         {tab === 'home' && (
           <>
-            {/* Lưới 9 chức năng 3x3 */}
             <div className="grid grid-cols-3 gap-3 sm:gap-4">
               {menuGrid.map(item => {
                 const Icon = item.icon;
@@ -811,7 +980,6 @@ export default function App() {
               })}
             </div>
 
-            {/* Thẻ Tin mới nhất / Thông báo nổi bật ngay dưới lưới */}
             <section className="space-y-3 pt-1">
               <div className="flex justify-between items-center px-1">
                 <h2 className="text-xs font-extrabold uppercase tracking-wider text-slate-500">Tin mới nhất</h2>
@@ -829,7 +997,7 @@ export default function App() {
                 </div>
               ) : (
                 announcements.slice(0, 3).map(a => (
-                  <div key={a.id} className="bg-white p-4 rounded-2xl border-l-4 border-l-emerald-600 border border-slate-100 shadow-sm space-y-1.5">
+                  <div key={a.id} className="bg-white p-4 rounded-2xl border-l-4 border-l-emerald-600 border border-slate-100 shadow-sm space-y-2">
                     <div className="flex items-center gap-2">
                       {a.is_pinned && <span className="text-[11px] bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full font-bold">Ghim</span>}
                       {a.priority === 'urgent' && <span className="text-[11px] bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-bold">Khẩn cấp</span>}
@@ -843,16 +1011,25 @@ export default function App() {
                         <img src={a.image_url} alt={a.title} className="w-full max-h-64 object-contain rounded-xl border border-slate-100 bg-slate-50" />
                       </a>
                     )}
+                    <div className="pt-1 flex justify-end">
+                      <button
+                        type="button"
+                        onClick={() => handleCopyPostLink('announcements', a)}
+                        className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 rounded-xl transition"
+                      >
+                        {copiedKey === `announcements-${a.id}` ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                        {copiedKey === `announcements-${a.id}` ? 'Đã sao chép link' : 'Sao chép link gửi Zalo'}
+                      </button>
+                    </div>
                   </div>
                 ))
               )}
             </section>
 
-            {/* Nút đăng ký nhận thông báo gọn nhẹ */}
             <div className="bg-white rounded-2xl p-4 border border-emerald-100 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
                 <div className="text-sm font-bold text-slate-800">Nhận tin báo nhanh từ Ban thôn</div>
-                <div className="text-xs text-slate-500">Cập nhật lịch họp, thông báo khẩn của thôn An Sơn</div>
+                <div className="text-xs text-slate-500">Bật 1 lần để điện thoại tự bật thông báo khi có tin mới</div>
               </div>
               <button onClick={requestNotification} className="bg-emerald-700 hover:bg-emerald-800 text-white px-4 py-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shrink-0">
                 <Bell className="w-4 h-4" /> {pushStatus === 'granted' ? 'Đã bật thông báo' : 'Bật thông báo'}
@@ -865,18 +1042,36 @@ export default function App() {
           <div className="space-y-4">
             <h2 className="text-xl font-bold text-slate-800">Thông báo Thôn An Sơn</h2>
             {announcements.length === 0 && <p className="text-slate-500 text-sm">Chưa có thông báo nào.</p>}
-            {announcements.map(a => (
-              <div key={a.id} className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm">
-                <div className="text-xs text-slate-400 mb-1">{a.is_pinned ? '📌 Đã ghim • ' : ''}{new Date(a.created_at).toLocaleDateString('vi-VN')}</div>
-                <h3 className="font-bold text-lg text-slate-800">{a.title}</h3>
-                <p className="text-slate-600 mt-2 whitespace-pre-line">{a.content}</p>
-                {a.image_url && (
-                  <a href={a.image_url} target="_blank" rel="noreferrer" className="block mt-3">
-                    <img src={a.image_url} alt={a.title} className="w-full max-h-96 object-contain rounded-xl border border-slate-100 bg-slate-50" />
-                  </a>
-                )}
-              </div>
-            ))}
+            {announcements.map(a => {
+              const postKey = `announcements-${a.id}`;
+              const isHighlighted = highlightedPost === postKey;
+              return (
+                <div
+                  key={a.id}
+                  id={`post-${postKey}`}
+                  className={`bg-white p-5 rounded-2xl border shadow-sm space-y-2 transition ${isHighlighted ? 'ring-2 ring-emerald-500 border-emerald-400' : 'border-slate-100'}`}
+                >
+                  <div className="text-xs text-slate-400">{a.is_pinned ? '📌 Đã ghim • ' : ''}{new Date(a.created_at).toLocaleDateString('vi-VN')}</div>
+                  <h3 className="font-bold text-lg text-slate-800">{a.title}</h3>
+                  <p className="text-slate-600 whitespace-pre-line">{a.content}</p>
+                  {a.image_url && (
+                    <a href={a.image_url} target="_blank" rel="noreferrer" className="block pt-1">
+                      <img src={a.image_url} alt={a.title} className="w-full max-h-96 object-contain rounded-xl border border-slate-100 bg-slate-50" />
+                    </a>
+                  )}
+                  <div className="pt-2 flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => handleCopyPostLink('announcements', a)}
+                      className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-3.5 py-2 rounded-xl transition"
+                    >
+                      {copiedKey === postKey ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                      {copiedKey === postKey ? 'Đã sao chép link Zalo' : 'Sao chép link gửi Zalo'}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
 
@@ -884,14 +1079,32 @@ export default function App() {
           <div className="space-y-4">
             <h2 className="text-xl font-bold text-slate-800">Tin tức & Hoạt động cộng đồng</h2>
             {news.length === 0 && <p className="text-slate-500 text-sm">Chưa có bài viết nào.</p>}
-            {news.map(n => (
-              <div key={n.id} className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm">
-                <span className="text-xs bg-emerald-100 text-emerald-800 px-2.5 py-0.5 rounded-full font-medium">{n.category}</span>
-                <h3 className="font-bold text-lg mt-2 text-slate-800">{n.title}</h3>
-                <p className="text-slate-600 mt-2 whitespace-pre-line">{n.content}</p>
-                {n.video_url && <a href={n.video_url} target="_blank" rel="noreferrer" className="inline-block mt-3 text-sm text-sky-700 font-semibold underline">▶ Xem video hoạt động</a>}
-              </div>
-            ))}
+            {news.map(n => {
+              const postKey = `news-${n.id}`;
+              const isHighlighted = highlightedPost === postKey;
+              return (
+                <div
+                  key={n.id}
+                  id={`post-${postKey}`}
+                  className={`bg-white p-5 rounded-2xl border shadow-sm space-y-2 transition ${isHighlighted ? 'ring-2 ring-emerald-500 border-emerald-400' : 'border-slate-100'}`}
+                >
+                  <span className="text-xs bg-emerald-100 text-emerald-800 px-2.5 py-0.5 rounded-full font-medium">{n.category}</span>
+                  <h3 className="font-bold text-lg text-slate-800">{n.title}</h3>
+                  <p className="text-slate-600 whitespace-pre-line">{n.content}</p>
+                  {n.video_url && <a href={n.video_url} target="_blank" rel="noreferrer" className="inline-block text-sm text-sky-700 font-semibold underline">▶ Xem video hoạt động</a>}
+                  <div className="pt-2 flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => handleCopyPostLink('news', n)}
+                      className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-3.5 py-2 rounded-xl transition"
+                    >
+                      {copiedKey === postKey ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                      {copiedKey === postKey ? 'Đã sao chép link Zalo' : 'Sao chép link gửi Zalo'}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
 
@@ -1085,7 +1298,6 @@ export default function App() {
         )}
       </main>
 
-      {/* Thanh điều hướng dưới cùng trên điện thoại */}
       <nav className="fixed bottom-0 inset-x-0 bg-white border-t border-slate-200 flex justify-around py-2 z-40">
         {[
           { id: 'home', label: 'Trang chủ', icon: Home },
@@ -1104,7 +1316,6 @@ export default function App() {
         })}
       </nav>
 
-      {/* QR Modal */}
       {showQRModal && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setShowQRModal(false)}>
           <div className="bg-white rounded-3xl p-6 max-w-sm w-full text-center space-y-4" onClick={e => e.stopPropagation()}>
