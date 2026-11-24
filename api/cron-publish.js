@@ -16,6 +16,7 @@ function parseScheduleLine(raw) {
     const meta = JSON.parse(jsonStr);
     return {
       publishAtMs: Number(meta?.publishAtMs) || 0,
+      publishLabel: meta?.publishLabel || '',
       sendPush: Boolean(meta?.sendPush),
       pushedDone: Boolean(meta?.pushedDone),
       body,
@@ -25,8 +26,8 @@ function parseScheduleLine(raw) {
   }
 }
 
-function packScheduleLine({ publishAtMs, sendPush, pushedDone }, body) {
-  return `${SCHEDULE_PREFIX}${JSON.stringify({ publishAtMs, sendPush, pushedDone })}\n${body}`;
+function packScheduleLine({ publishAtMs, publishLabel, sendPush, pushedDone }, body) {
+  return `${SCHEDULE_PREFIX}${JSON.stringify({ publishAtMs, publishLabel, sendPush, pushedDone })}\n${body}`;
 }
 
 async function sendOneSignalBroadcast({ appId, restKey, heading, content, url, imageUrl }) {
@@ -80,9 +81,10 @@ export default async function handler(req, res) {
   const nowMs = Date.now();
   const siteUrl = process.env.SITE_URL || 'https://thon-an-son-thong-minh.vercel.app';
   let processed = 0;
+  let skippedNoPermission = 0;
 
   try {
-    // 1. Kiểm tra thông báo & tin tức (lưu trong announcements hoặc news) đã tới giờ hẹn
+    // 1. Xử lý Thông báo & Tin tức hẹn giờ
     const { data: anns } = await supabase.from('announcements').select('*');
     for (const row of anns || []) {
       const parsed = parseScheduleLine(row.content);
@@ -90,11 +92,26 @@ export default async function handler(req, res) {
         const isNewsPost = parsed.body.startsWith('__IS_NEWS__:1\n');
         const cleanBody = isNewsPost ? parsed.body.replace(/^__IS_NEWS__:1\n/, '') : parsed.body;
         const updatedContent = packScheduleLine(
-          { publishAtMs: parsed.publishAtMs, sendPush: parsed.sendPush, pushedDone: true },
+          {
+            publishAtMs: parsed.publishAtMs,
+            publishLabel: parsed.publishLabel,
+            sendPush: parsed.sendPush,
+            pushedDone: true,
+          },
           parsed.body
         );
 
-        await supabase.from('announcements').update({ content: updatedContent }).eq('id', row.id);
+        // CHỈ gửi chuông khi cập nhật thành công lên Supabase (tránh lặp lại mỗi phút)
+        const { data: updatedRows, error: updateErr } = await supabase
+          .from('announcements')
+          .update({ content: updatedContent })
+          .eq('id', row.id)
+          .select('id');
+
+        if (updateErr || !updatedRows || updatedRows.length === 0) {
+          skippedNoPermission += 1;
+          continue;
+        }
 
         if (parsed.sendPush && restKey) {
           await sendOneSignalBroadcast({
@@ -110,7 +127,7 @@ export default async function handler(req, res) {
       }
     }
 
-    // 2. Kiểm tra lịch thôn (events) có hẹn giờ đẩy chuông tới hạn
+    // 2. Xử lý Lịch thôn hẹn giờ
     const { data: evts } = await supabase.from('events').select('*');
     for (const ev of evts || []) {
       const rawDesc = String(ev.description || '');
@@ -118,7 +135,17 @@ export default async function handler(req, res) {
         const parsed = parseScheduleLine(rawDesc);
         if (parsed && parsed.publishAtMs > 0 && parsed.publishAtMs <= nowMs) {
           const updatedDesc = `${rawDesc}\n${PUSH_FLAG}`;
-          await supabase.from('events').update({ description: updatedDesc }).eq('id', ev.id);
+          const { data: updatedEvt, error: evtErr } = await supabase
+            .from('events')
+            .update({ description: updatedDesc })
+            .eq('id', ev.id)
+            .select('id');
+
+          if (evtErr || !updatedEvt || updatedEvt.length === 0) {
+            skippedNoPermission += 1;
+            continue;
+          }
+
           if (parsed.sendPush && restKey) {
             await sendOneSignalBroadcast({
               appId,
@@ -133,7 +160,16 @@ export default async function handler(req, res) {
       }
     }
 
-    return res.status(200).json({ ok: true, processed, checkedAt: new Date().toISOString() });
+    return res.status(200).json({
+      ok: true,
+      processed,
+      skippedNoPermission,
+      note:
+        skippedNoPermission > 0
+          ? 'Cần thêm biến SUPABASE_SERVICE_ROLE_KEY trên Vercel để cron tự đánh dấu đã gửi.'
+          : 'OK',
+      checkedAt: new Date().toISOString(),
+    });
   } catch (err) {
     return res.status(500).json({ ok: false, error: err?.message || 'Lỗi cron xuất bản' });
   }
