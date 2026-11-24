@@ -10,7 +10,7 @@ import {
 } from 'lucide-react';
 import { supabase, isConfigured } from './supabaseClient';
 
-const APP_VERSION = 'v1.6.3';
+const APP_VERSION = 'v1.6.5';
 const SEEN_IDS_KEY = 'thon_an_son_seen_post_ids_v1';
 const SETTINGS_STORAGE_KEY = 'thon_an_son_app_settings_v1';
 const DONATION_LIST_MARKER = '__THON_AN_SON_UNG_HO__';
@@ -127,7 +127,6 @@ const syncOneSignalAdminTag = (isAdmin) => {
   });
 };
 
-// Lấy ngày & giờ hiện tại theo múi giờ Việt Nam (UTC+7)
 const getVietnamDateTimeInputs = (offsetMinutes = 0) => {
   const vnDate = new Date(Date.now() + offsetMinutes * 60000 + 7 * 3600000);
   const pad = (n) => String(n).padStart(2, '0');
@@ -370,6 +369,30 @@ export default function App() {
   const showToast = (msg, duration = 5000) => {
     setToast(msg);
     setTimeout(() => setToast(''), duration);
+  };
+
+  const handleDeleteAnnouncementRow = async (id, title = '') => {
+    if (!id) return;
+    if (!confirm(`Xác nhận xóa "${title || 'mục này'}"?`)) return;
+    const { error } = await supabase.from('announcements').delete().eq('id', id);
+    if (error) {
+      showToast('Lỗi xóa mục: ' + error.message);
+      return;
+    }
+    await fetchPublicData();
+    showToast('Đã xóa thành công!');
+  };
+
+  const handleDeleteNewsRow = async (id, title = '') => {
+    if (!id) return;
+    if (!confirm(`Xác nhận xóa bài viết "${title || 'này'}"?`)) return;
+    const { error } = await supabase.from('news').delete().eq('id', id);
+    if (error) {
+      showToast('Lỗi xóa bài viết: ' + error.message);
+      return;
+    }
+    await fetchPublicData();
+    showToast('Đã xóa bài viết!');
   };
 
   const goHomePublic = () => {
@@ -1409,12 +1432,14 @@ export default function App() {
   });
 
   const publishedAnnouncements = formattedAnnouncements.filter((a) => !a.isScheduledPending && !a.isNewsPost);
-  const publishedScheduledNews = formattedAnnouncements.filter((a) => !a.isScheduledPending && a.isNewsPost);
-  const scheduledPendingItems = formattedAnnouncements.filter((a) => a.isScheduledPending);
+  const scheduledNewsDrafts = formattedAnnouncements.filter((a) => a.isNewsPost);
+  const publishedScheduledNews = scheduledNewsDrafts.filter((a) => !a.isScheduledPending);
+  const scheduledPendingItems = formattedAnnouncements.filter((a) => a.isScheduledPending && !a.isNewsPost);
 
   const allPublishedNews = [
     ...publishedScheduledNews.map((item) => ({
       id: `sch-${item.id}`,
+      sourceAnnId: item.id,
       title: item.title,
       content: item.cleanContent,
       category: 'Tin tức hẹn giờ',
@@ -1438,7 +1463,7 @@ export default function App() {
 
   const donationItems = (donationSystemList
     ? customItems.filter((i) => i.list_id === donationSystemList.id)
-    : []
+                         : []
   ).map((item) => {
     const meta = decodeMeta(item.notes, { amount: parseMoneyAmount(item.phone), in_kind: '', date: '', note: '' });
     return {
@@ -1639,7 +1664,7 @@ export default function App() {
               <div className="bg-white p-6 rounded-2xl border shadow-sm space-y-2">
                 <h3 className="font-bold text-slate-800">Trạng thái bảo mật & Thông báo đẩy ({APP_VERSION})</h3>
                 <p className="text-sm text-emerald-700 flex items-center gap-2"><CheckCircle className="w-4 h-4 shrink-0" /> Đã kết nối cơ sở dữ liệu Supabase thời gian thực.</p>
-                <p className="text-sm text-emerald-700 flex items-center gap-2"><CheckCircle className="w-4 h-4 shrink-0" /> Chuẩn giờ Việt Nam (GMT+7), tới giờ hẹn tự động xuất bản & đẩy chuông dù tắt màn hình.</p>
+                <p className="text-sm text-emerald-700 flex items-center gap-2"><CheckCircle className="w-4 h-4 shrink-0" /> Đã có nút Xóa trực tiếp cho toàn bộ tin tức hẹn giờ và thông báo chờ đăng.</p>
               </div>
             </div>
           )}
@@ -1719,7 +1744,14 @@ export default function App() {
                         <div className="font-bold text-slate-800">{a.title}</div>
                         <p className="text-xs text-slate-600 whitespace-pre-line">{a.cleanContent}</p>
                       </div>
-                      <button onClick={async () => { if (confirm('Xóa mục hẹn giờ này?')) { await supabase.from('announcements').delete().eq('id', a.id); fetchPublicData(); } }} className="text-red-500 hover:bg-red-50 p-2 rounded-lg"><Trash2 className="w-4 h-4" /></button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteAnnouncementRow(a.id, a.title)}
+                        className="text-red-600 hover:bg-red-100 bg-white border border-red-200 px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1 shrink-0"
+                        title="Xóa mục hẹn giờ"
+                      >
+                        <Trash2 className="w-4 h-4" /> Xóa
+                      </button>
                     </div>
                   ))}
                 </div>
@@ -1745,7 +1777,14 @@ export default function App() {
                         {copiedKey === `announcements-${a.id}` ? 'Đã sao chép link Zalo' : 'Sao chép link gửi Zalo'}
                       </button>
                     </div>
-                    <button onClick={async () => { if (confirm('Xóa thông báo này?')) { await supabase.from('announcements').delete().eq('id', a.id); fetchPublicData(); } }} className="text-red-500 hover:bg-red-50 p-2 rounded-lg"><Trash2 className="w-4 h-4" /></button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteAnnouncementRow(a.id, a.title)}
+                      className="text-red-500 hover:bg-red-50 p-2 rounded-lg shrink-0"
+                      title="Xóa thông báo"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
                   </div>
                 ))}
               </div>
@@ -1794,6 +1833,33 @@ export default function App() {
                 </div>
               </form>
 
+              {scheduledNewsDrafts.length > 0 && (
+                <div className="space-y-2.5">
+                  <h2 className="text-sm font-extrabold uppercase text-amber-800">
+                    Tin tức hẹn giờ / đã đặt lịch ({scheduledNewsDrafts.length}) — Bấm Xóa để gỡ ngay
+                  </h2>
+                  {scheduledNewsDrafts.map((item) => (
+                    <div key={`news-sch-${item.id}`} className="bg-amber-50/80 p-4 rounded-xl border border-amber-200 flex justify-between items-start gap-4">
+                      <div className="space-y-1 flex-1">
+                        <div className="text-xs font-bold text-amber-800">
+                          ⏰ {item.isScheduledPending ? `Đang hẹn: ${item.publishLabel}` : `Đã tới giờ hẹn (${item.publishLabel})`}
+                        </div>
+                        <div className="font-bold text-slate-800">{item.title}</div>
+                        <p className="text-xs text-slate-600 whitespace-pre-line">{item.cleanContent}</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteAnnouncementRow(item.id, item.title)}
+                        className="text-red-600 hover:bg-red-100 bg-white border border-red-200 px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1 shrink-0"
+                        title="Xóa bài hẹn giờ này"
+                      >
+                        <Trash2 className="w-4 h-4" /> Xóa
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
               <div className="space-y-3">
                 {news.map(n => (
                   <div key={n.id} className="bg-white p-4 rounded-xl border flex justify-between items-start gap-4">
@@ -1809,7 +1875,14 @@ export default function App() {
                         {copiedKey === `news-${n.id}` ? 'Đã sao chép link Zalo' : 'Sao chép link gửi Zalo'}
                       </button>
                     </div>
-                    <button onClick={async () => { if (confirm('Xóa bài viết?')) { await supabase.from('news').delete().eq('id', n.id); fetchPublicData(); } }} className="text-red-500 p-2"><Trash2 className="w-4 h-4" /></button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteNewsRow(n.id, n.title)}
+                      className="text-red-500 hover:bg-red-50 p-2 rounded-lg shrink-0"
+                      title="Xóa bài viết"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
                   </div>
                 ))}
               </div>
@@ -2698,7 +2771,7 @@ export default function App() {
                 <div className="flex items-center justify-between">
                   <div>
                     <div className="font-bold text-lg">Phiên bản hiện tại: {APP_VERSION}</div>
-                    <p className="text-sm text-slate-500">Hỗ trợ chọn tích hẹn ngày giờ đăng (GMT+7) cho Thông báo, Tin tức & Lịch thôn; máy chủ tự đẩy chuông dù tắt màn hình.</p>
+                    <p className="text-sm text-slate-500">Có nút xóa trực tiếp cho các mục hẹn giờ tin tức/thông báo, chuẩn giờ Việt Nam (GMT+7).</p>
                   </div>
                   <button onClick={() => window.location.reload()} className="bg-slate-100 hover:bg-slate-200 px-4 py-2 rounded-xl text-sm font-medium flex items-center gap-2"><RefreshCw className="w-4 h-4" /> Kiểm tra cập nhật</button>
                 </div>
@@ -2896,7 +2969,7 @@ export default function App() {
                     onClick={() => openPostFromKey(`announcements-${a.id}`)}
                     className="w-full bg-white p-4 rounded-2xl border-l-4 border-l-emerald-600 border border-slate-100 text-left shadow-sm space-y-1"
                   >
-                    <div className="text-[11px] font-bold text-emerald-700">THÔNG BÁO • {new Date(a.created_at).toLocaleDateString('vi-VN')}</div>
+                    <div className="text-[11px] font-bold text-emerald-700">THÔNG BÁO • {new Date(a.created_at).toLocaleDateString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })}</div>
                     <div className="font-bold text-slate-800 text-sm">{a.title}</div>
                     <div className="text-xs text-slate-500 line-clamp-2">{a.cleanContent}</div>
                   </button>
@@ -3067,9 +3140,21 @@ export default function App() {
 
                       {allPublishedNews.slice(0, 2).map((n) => (
                         <div key={n.id} className="bg-white p-4 rounded-2xl border-l-4 border-l-teal-500 border border-slate-100 shadow-sm space-y-2">
-                          <div className="flex items-center gap-2">
-                            <span className="text-[11px] bg-teal-50 text-teal-800 px-2.5 py-0.5 rounded-full font-bold">{n.category}</span>
-                            <span className="text-[11px] text-slate-400 ml-auto">{new Date(n.created_at).toLocaleDateString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })}</span>
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-2">
+                              <span className="text-[11px] bg-teal-50 text-teal-800 px-2.5 py-0.5 rounded-full font-bold">{n.category}</span>
+                              <span className="text-[11px] text-slate-400">{new Date(n.created_at).toLocaleDateString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })}</span>
+                            </div>
+                            {session && n.sourceAnnId && (
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteAnnouncementRow(n.sourceAnnId, n.title)}
+                                className="text-red-500 hover:bg-red-50 p-1.5 rounded-lg"
+                                title="Xóa bài này"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            )}
                           </div>
                           <h3
                             onClick={() => navigatePublic('feed', 'news')}
@@ -3163,7 +3248,19 @@ export default function App() {
                     )}
                     {allPublishedNews.map((n) => (
                       <div key={n.id} className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-2">
-                        <span className="text-xs bg-teal-100 text-teal-800 px-2.5 py-0.5 rounded-full font-medium">{n.category}</span>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs bg-teal-100 text-teal-800 px-2.5 py-0.5 rounded-full font-medium">{n.category}</span>
+                          {session && n.sourceAnnId && (
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteAnnouncementRow(n.sourceAnnId, n.title)}
+                              className="text-red-500 hover:bg-red-50 p-1.5 rounded-lg"
+                              title="Xóa bài này"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
+                        </div>
                         <h3 className="font-bold text-lg text-slate-800">{n.title}</h3>
                         <p className="text-slate-600 whitespace-pre-line text-sm">{n.content}</p>
                         {n.video_url && (
