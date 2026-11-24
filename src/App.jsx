@@ -10,12 +10,13 @@ import {
 } from 'lucide-react';
 import { supabase, isConfigured } from './supabaseClient';
 
-const APP_VERSION = 'v1.6.1';
+const APP_VERSION = 'v1.6.2';
 const SEEN_IDS_KEY = 'thon_an_son_seen_post_ids_v1';
 const SETTINGS_STORAGE_KEY = 'thon_an_son_app_settings_v1';
 const DONATION_LIST_MARKER = '__THON_AN_SON_UNG_HO__';
 const LEDGER_LIST_MARKER = '__THON_AN_SON_THU_CHI__';
 const SCHEDULE_META_PREFIX = '__ANN_SCHEDULE__:';
+const NEWS_TAG_PREFIX = '__IS_NEWS__:1\n';
 
 const ONESIGNAL_APP_ID =
   (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_ONESIGNAL_APP_ID) ||
@@ -134,43 +135,66 @@ const getLocalDateTimeInputs = (offsetMinutes = 0) => {
   return { dateStr, timeStr };
 };
 
-const parseAnnouncementSchedule = (content) => {
-  const raw = String(content || '');
-  const firstLineEnd = raw.indexOf('\n');
-  const firstLine = firstLineEnd === -1 ? raw : raw.slice(0, firstLineEnd);
+const parseScheduledItem = (raw) => {
+  const text = String(raw || '');
+  const firstNl = text.indexOf('\n');
+  const firstLine = firstNl === -1 ? text : text.slice(0, firstNl);
   if (!firstLine.startsWith(SCHEDULE_META_PREFIX)) {
-    return { publishAtMs: 0, publishLabel: '', cleanContent: raw };
+    const isNewsPost = text.startsWith(NEWS_TAG_PREFIX);
+    return {
+      hasSchedule: false,
+      publishAtMs: 0,
+      publishLabel: '',
+      sendPush: false,
+      pushedDone: true,
+      isNewsPost,
+      cleanContent: isNewsPost ? text.slice(NEWS_TAG_PREFIX.length) : text,
+    };
   }
   const jsonPart = firstLine.slice(SCHEDULE_META_PREFIX.length);
-  const bodyPart = firstLineEnd === -1 ? '' : raw.slice(firstLineEnd + 1);
+  const bodyPart = firstNl === -1 ? '' : text.slice(firstNl + 1);
   try {
     const meta = JSON.parse(jsonPart);
     const ms = Number(meta?.publishAtMs) || 0;
+    const isNewsPost = bodyPart.startsWith(NEWS_TAG_PREFIX);
     return {
+      hasSchedule: ms > 0,
       publishAtMs: ms,
       publishLabel: meta?.publishLabel || (ms ? new Date(ms).toLocaleString('vi-VN') : ''),
-      cleanContent: bodyPart,
+      sendPush: Boolean(meta?.sendPush),
+      pushedDone: Boolean(meta?.pushedDone),
+      isNewsPost,
+      cleanContent: isNewsPost ? bodyPart.slice(NEWS_TAG_PREFIX.length) : bodyPart,
     };
   } catch (_e) {
-    return { publishAtMs: 0, publishLabel: '', cleanContent: bodyPart };
+    return {
+      hasSchedule: false,
+      publishAtMs: 0,
+      publishLabel: '',
+      sendPush: false,
+      pushedDone: true,
+      isNewsPost: false,
+      cleanContent: bodyPart,
+    };
   }
 };
 
-const packAnnouncementContent = (cleanContent, publishDate, publishTime) => {
-  const body = String(cleanContent || '').trim();
-  if (!publishDate) return body;
-  const timeClean = (publishTime || '07:00').trim();
-  const dt = new Date(`${publishDate}T${timeClean}:00`);
-  const ms = dt.getTime();
-  if (!Number.isFinite(ms)) return body;
+const packScheduledItem = ({ cleanContent, scheduleDate, scheduleTime, sendPush, isNewsPost }) => {
+  const bodyCore = `${isNewsPost ? NEWS_TAG_PREFIX : ''}${String(cleanContent || '').trim()}`;
+  if (!scheduleDate) return bodyCore;
+  const timeClean = (scheduleTime || '07:00').trim();
+  const ms = new Date(`${scheduleDate}T${timeClean}:00`).getTime();
+  if (!Number.isFinite(ms)) return bodyCore;
   const metaObj = {
     publishAtMs: ms,
-    publishLabel: `${publishDate} ${timeClean}`,
+    publishLabel: `${scheduleDate} ${timeClean}`,
+    sendPush: Boolean(sendPush),
+    pushedDone: ms <= Date.now() + 15000,
   };
-  return `${SCHEDULE_META_PREFIX}${JSON.stringify(metaObj)}\n${body}`;
+  return `${SCHEDULE_META_PREFIX}${JSON.stringify(metaObj)}\n${bodyCore}`;
 };
 
-const parseEventSchedule = (ev) => {
+const parseEventInfo = (ev) => {
   const rawDesc = String(ev?.description || '');
   let publishAtMs = 0;
   let publishLabel = '';
@@ -189,16 +213,11 @@ const parseEventSchedule = (ev) => {
     }
   }
 
-  const evtDate = String(ev?.event_date || '').trim();
-  const evtTime = String(ev?.event_time || '23:59').trim();
-  const evtDateTimeMs = evtDate ? new Date(`${evtDate}T${evtTime.length === 5 ? evtTime : '23:59'}:00`).getTime() : 0;
-
   return {
     publishAtMs,
     publishLabel,
     cleanDesc,
-    evtDate,
-    evtDateTimeMs,
+    evtDate: String(ev?.event_date || '').trim(),
   };
 };
 
@@ -296,25 +315,28 @@ export default function App() {
 
   const hasInitializedFeedRef = useRef(false);
 
-  // Announcement image upload & push toggles + schedule
-  const initialNow = getLocalDateTimeInputs(0);
+  // Schedule toggles (mặc định KHÔNG tích = đăng ngay, bật tích mới hiện ngày giờ hẹn)
+  const defaultLater = getLocalDateTimeInputs(15);
   const [annImageFile, setAnnImageFile] = useState(null);
   const [annImagePreview, setAnnImagePreview] = useState('');
   const [uploadingAnn, setUploadingAnn] = useState(false);
   const [sendPushOnAnn, setSendPushOnAnn] = useState(true);
-  const [annScheduleDate, setAnnScheduleDate] = useState(initialNow.dateStr);
-  const [annScheduleTime, setAnnScheduleTime] = useState(initialNow.timeStr);
+  const [useAnnSchedule, setUseAnnSchedule] = useState(false);
+  const [annScheduleDate, setAnnScheduleDate] = useState(defaultLater.dateStr);
+  const [annScheduleTime, setAnnScheduleTime] = useState(defaultLater.timeStr);
 
   const [sendPushOnNews, setSendPushOnNews] = useState(true);
+  const [useNewsSchedule, setUseNewsSchedule] = useState(false);
+  const [newsScheduleDate, setNewsScheduleDate] = useState(defaultLater.dateStr);
+  const [newsScheduleTime, setNewsScheduleTime] = useState(defaultLater.timeStr);
 
   const [sendPushOnEvent, setSendPushOnEvent] = useState(true);
-  const [evtPublishDate, setEvtPublishDate] = useState(initialNow.dateStr);
-  const [evtPublishTime, setEvtPublishTime] = useState(initialNow.timeStr);
+  const [useEvtSchedule, setUseEvtSchedule] = useState(false);
+  const [evtPublishDate, setEvtPublishDate] = useState(defaultLater.dateStr);
+  const [evtPublishTime, setEvtPublishTime] = useState(defaultLater.timeStr);
 
-  // Feedback form
+  // Feedback & Suggestion forms
   const [fbForm, setFbForm] = useState({ sender_name: '', sender_phone: '', category: 'Đường làng, ngõ xóm', content: '' });
-
-  // Suggestion form
   const [sugForm, setSugForm] = useState({
     sender_name: '',
     sender_phone: '',
@@ -604,11 +626,11 @@ export default function App() {
         const row = payload.new;
         fetchPublicData();
         if (row) {
-          const parsed = parseAnnouncementSchedule(row.content);
-          if (!parsed.publishAtMs || parsed.publishAtMs <= Date.now()) {
+          const parsed = parseScheduledItem(row.content);
+          if (!parsed.hasSchedule || parsed.publishAtMs <= Date.now()) {
             triggerBrowserAlert(
-              'Thông báo mới – Thôn An Sơn',
-              row.title || 'Có thông báo mới vừa được đăng tải.',
+              parsed.isNewsPost ? 'Tin tức mới – Thôn An Sơn' : 'Thông báo mới – Thôn An Sơn',
+              row.title || 'Có cập nhật mới cho bà con.',
               `announcements-${row.id}`
             );
           }
@@ -1046,7 +1068,7 @@ export default function App() {
     if (error) setAuthError('Sai email hoặc mật khẩu. Vui lòng kiểm tra lại.');
     else {
       syncOneSignalAdminTag(true);
-      showToast('Đăng nhập Ban quản trị thành công! Thiết bị này sẽ nhận chuông báo khi có phản ánh/góp ý mới.');
+      showToast('Đăng nhập Ban quản trị thành công!');
     }
   };
 
@@ -1165,10 +1187,19 @@ export default function App() {
         image_url = urlData.publicUrl;
       }
 
-      const scheduledMs = annScheduleDate ? new Date(`${annScheduleDate}T${(annScheduleTime || '00:00').trim()}:00`).getTime() : 0;
-      const isFutureScheduled = scheduledMs > Date.now() + 15000;
-      const packedContent = isFutureScheduled
-        ? packAnnouncementContent(annForm.content, annScheduleDate, annScheduleTime)
+      const scheduledMs = useAnnSchedule && annScheduleDate
+        ? new Date(`${annScheduleDate}T${(annScheduleTime || '00:00').trim()}:00`).getTime()
+        : 0;
+      const isFutureScheduled = Boolean(useAnnSchedule && scheduledMs > Date.now() + 15000);
+
+      const packedContent = useAnnSchedule
+        ? packScheduledItem({
+            cleanContent: annForm.content,
+            scheduleDate: annScheduleDate,
+            scheduleTime: annScheduleTime,
+            sendPush: sendPushOnAnn,
+            isNewsPost: false,
+          })
         : annForm.content;
 
       const payload = image_url
@@ -1179,7 +1210,7 @@ export default function App() {
       if (!error) {
         const created = insertedRows?.[0];
         let msg = isFutureScheduled
-          ? `Đã hẹn giờ đăng thông báo vào ${annScheduleDate} lúc ${annScheduleTime}!`
+          ? `Đã hẹn giờ đăng thông báo vào ${annScheduleDate} lúc ${annScheduleTime}! Tới giờ máy chủ sẽ tự đăng và báo chuông.`
           : 'Đã đăng thông báo mới!';
 
         if (!isFutureScheduled && sendPushOnAnn) {
@@ -1191,14 +1222,13 @@ export default function App() {
             target: 'all',
           });
           msg = formatPushResultMessage('Đã đăng thông báo!', pushRes);
-        } else if (isFutureScheduled && sendPushOnAnn) {
-          msg = `Đã hẹn giờ đăng lúc ${annScheduleDate} ${annScheduleTime} — đến giờ đăng sẽ tự động đẩy chuông báo tới bà con!`;
         }
 
-        const freshNow = getLocalDateTimeInputs(0);
+        const nextLater = getLocalDateTimeInputs(15);
         setAnnForm({ title: '', content: '', priority: 'normal', is_pinned: false });
-        setAnnScheduleDate(freshNow.dateStr);
-        setAnnScheduleTime(freshNow.timeStr);
+        setUseAnnSchedule(false);
+        setAnnScheduleDate(nextLater.dateStr);
+        setAnnScheduleTime(nextLater.timeStr);
         clearAnnImage();
         fetchPublicData();
         showToast(msg, 6000);
@@ -1207,6 +1237,65 @@ export default function App() {
       }
     } finally {
       setUploadingAnn(false);
+    }
+  };
+
+  const handleNewsSubmit = async (e) => {
+    e.preventDefault();
+    const scheduledMs = useNewsSchedule && newsScheduleDate
+      ? new Date(`${newsScheduleDate}T${(newsScheduleTime || '00:00').trim()}:00`).getTime()
+      : 0;
+    const isFutureScheduled = Boolean(useNewsSchedule && scheduledMs > Date.now() + 15000);
+
+    if (isFutureScheduled) {
+      const packedContent = packScheduledItem({
+        cleanContent: newsForm.content,
+        scheduleDate: newsScheduleDate,
+        scheduleTime: newsScheduleTime,
+        sendPush: sendPushOnNews,
+        isNewsPost: true,
+      });
+      const { error } = await supabase.from('announcements').insert([
+        {
+          title: newsForm.title,
+          content: packedContent,
+          priority: 'normal',
+          is_pinned: false,
+        },
+      ]);
+      if (!error) {
+        const nextLater = getLocalDateTimeInputs(15);
+        setNewsForm({ title: '', content: '', category: 'Hoạt động cộng đồng', video_url: '' });
+        setUseNewsSchedule(false);
+        setNewsScheduleDate(nextLater.dateStr);
+        setNewsScheduleTime(nextLater.timeStr);
+        fetchPublicData();
+        showToast(`Đã hẹn giờ đăng tin tức lúc ${newsScheduleDate} ${newsScheduleTime}! Tới giờ máy chủ sẽ tự đăng và đẩy chuông báo.`, 6000);
+      } else {
+        showToast('Lỗi: ' + error.message);
+      }
+      return;
+    }
+
+    const { data: insertedRows, error } = await supabase.from('news').insert([newsForm]).select();
+    if (!error) {
+      const created = insertedRows?.[0];
+      let msg = 'Đã đăng bài viết!';
+      if (sendPushOnNews) {
+        const pushRes = await dispatchOneSignalPush({
+          heading: `Tin tức mới – ${appSettings.village_name}`,
+          content: newsForm.title,
+          launchUrl: created ? getPostShareUrl('news', created.id) : siteUrl,
+          target: 'all',
+        });
+        msg = formatPushResultMessage('Đã đăng bài viết!', pushRes);
+      }
+      setNewsForm({ title: '', content: '', category: 'Hoạt động cộng đồng', video_url: '' });
+      setUseNewsSchedule(false);
+      fetchPublicData();
+      showToast(msg, 6000);
+    } else {
+      showToast('Lỗi: ' + error.message);
     }
   };
 
@@ -1301,25 +1390,37 @@ export default function App() {
   const nowMs = Date.now();
   const todayIso = getLocalDateTimeInputs(0).dateStr;
 
-  // Tách thông báo đã xuất bản vs thông báo đang hẹn giờ tương lai
   const formattedAnnouncements = announcements.map((a) => {
-    const sch = parseAnnouncementSchedule(a.content);
-    const isScheduledPending = Boolean(sch.publishAtMs && sch.publishAtMs > nowMs);
+    const parsed = parseScheduledItem(a.content);
+    const isScheduledPending = Boolean(parsed.hasSchedule && parsed.publishAtMs > nowMs && !parsed.pushedDone);
     return {
       ...a,
-      cleanContent: sch.cleanContent,
-      publishAtMs: sch.publishAtMs,
-      publishLabel: sch.publishLabel,
+      cleanContent: parsed.cleanContent,
+      publishAtMs: parsed.publishAtMs,
+      publishLabel: parsed.publishLabel,
+      isNewsPost: parsed.isNewsPost,
       isScheduledPending,
     };
   });
 
-  const publishedAnnouncements = formattedAnnouncements.filter((a) => !a.isScheduledPending);
-  const scheduledAnnouncements = formattedAnnouncements.filter((a) => a.isScheduledPending);
+  const publishedAnnouncements = formattedAnnouncements.filter((a) => !a.isScheduledPending && !a.isNewsPost);
+  const publishedScheduledNews = formattedAnnouncements.filter((a) => !a.isScheduledPending && a.isNewsPost);
+  const scheduledPendingItems = formattedAnnouncements.filter((a) => a.isScheduledPending);
 
-  // Lịch thôn: chỉ lấy các lịch chưa qua ngày/giờ hoặc đang hẹn ngày đăng
+  const allPublishedNews = [
+    ...publishedScheduledNews.map((item) => ({
+      id: `sch-${item.id}`,
+      title: item.title,
+      content: item.cleanContent,
+      category: 'Tin tức hẹn giờ',
+      created_at: item.created_at,
+      video_url: '',
+    })),
+    ...news,
+  ];
+
   const upcomingEvents = events.filter((ev) => {
-    const info = parseEventSchedule(ev);
+    const info = parseEventInfo(ev);
     if (!info.evtDate) return true;
     return info.evtDate >= todayIso;
   });
@@ -1533,7 +1634,7 @@ export default function App() {
               <div className="bg-white p-6 rounded-2xl border shadow-sm space-y-2">
                 <h3 className="font-bold text-slate-800">Trạng thái bảo mật & Thông báo đẩy ({APP_VERSION})</h3>
                 <p className="text-sm text-emerald-700 flex items-center gap-2"><CheckCircle className="w-4 h-4 shrink-0" /> Đã kết nối cơ sở dữ liệu Supabase thời gian thực.</p>
-                <p className="text-sm text-emerald-700 flex items-center gap-2"><CheckCircle className="w-4 h-4 shrink-0" /> Hỗ trợ hẹn ngày giờ đăng cho Lịch thôn & Thông báo, tự động đẩy chuông khi đăng.</p>
+                <p className="text-sm text-emerald-700 flex items-center gap-2"><CheckCircle className="w-4 h-4 shrink-0" /> Tích chọn hẹn ngày giờ đăng tự động xuất bản & gửi chuông qua máy chủ dù tắt màn hình.</p>
               </div>
             </div>
           )}
@@ -1544,22 +1645,6 @@ export default function App() {
               <form onSubmit={handleAnnouncementSubmit} className="bg-white p-6 rounded-2xl shadow-sm border space-y-4">
                 <input required placeholder="Tiêu đề thông báo..." value={annForm.title} onChange={e => setAnnForm({ ...annForm, title: e.target.value })} className="w-full border px-4 py-2.5 rounded-xl" />
                 <textarea required rows={4} placeholder="Nội dung chi tiết..." value={annForm.content} onChange={e => setAnnForm({ ...annForm, content: e.target.value })} className="w-full border px-4 py-2.5 rounded-xl" />
-
-                <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 space-y-2">
-                  <div className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
-                    <Clock className="w-4 h-4 text-emerald-700" /> Hẹn ngày giờ đăng thông báo (để mặc định nếu đăng ngay)
-                  </div>
-                  <div className="grid sm:grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-[11px] font-semibold text-slate-500 mb-1">Ngày hẹn đăng</label>
-                      <input type="date" value={annScheduleDate} onChange={e => setAnnScheduleDate(e.target.value)} className="w-full border bg-white px-3 py-2 rounded-xl text-sm" />
-                    </div>
-                    <div>
-                      <label className="block text-[11px] font-semibold text-slate-500 mb-1">Giờ hẹn đăng</label>
-                      <input type="time" value={annScheduleTime} onChange={e => setAnnScheduleTime(e.target.value)} className="w-full border bg-white px-3 py-2 rounded-xl text-sm" />
-                    </div>
-                  </div>
-                </div>
 
                 <div className="space-y-2">
                   <label className="inline-flex items-center gap-2 cursor-pointer bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-xl text-sm font-medium border border-slate-200 transition">
@@ -1586,26 +1671,50 @@ export default function App() {
                   <label className="flex items-center gap-2 text-sm">
                     <input type="checkbox" checked={annForm.is_pinned} onChange={e => setAnnForm({ ...annForm, is_pinned: e.target.checked })} /> Ghim lên đầu trang
                   </label>
+                  <label className="flex items-center gap-2 text-sm font-semibold text-amber-800">
+                    <input
+                      type="checkbox"
+                      checked={useAnnSchedule}
+                      onChange={e => setUseAnnSchedule(e.target.checked)}
+                    />
+                    <Clock className="w-4 h-4" /> Hẹn ngày giờ đăng
+                  </label>
                   <label className="flex items-center gap-2 text-sm font-semibold text-emerald-800">
                     <input type="checkbox" checked={sendPushOnAnn} onChange={e => setSendPushOnAnn(e.target.checked)} /> Đẩy chuông báo tới điện thoại bà con
                   </label>
-                  <button disabled={uploadingAnn} className="ml-auto bg-emerald-700 text-white px-6 py-2.5 rounded-xl font-semibold hover:bg-emerald-800 disabled:opacity-60 flex items-center gap-2">
-                    <Plus className="w-4 h-4" /> {uploadingAnn ? 'Đang lưu...' : 'Đăng / Hẹn giờ thông báo'}
+                </div>
+
+                {useAnnSchedule && (
+                  <div className="bg-amber-50/80 p-3.5 rounded-xl border border-amber-200 grid sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[11px] font-bold text-amber-900 mb-1">Ngày hẹn đăng</label>
+                      <input required type="date" value={annScheduleDate} onChange={e => setAnnScheduleDate(e.target.value)} className="w-full border bg-white px-3 py-2 rounded-xl text-sm" />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-bold text-amber-900 mb-1">Giờ hẹn đăng</label>
+                      <input required type="time" value={annScheduleTime} onChange={e => setAnnScheduleTime(e.target.value)} className="w-full border bg-white px-3 py-2 rounded-xl text-sm" />
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex justify-end">
+                  <button disabled={uploadingAnn} className="bg-emerald-700 text-white px-6 py-2.5 rounded-xl font-semibold hover:bg-emerald-800 disabled:opacity-60 flex items-center gap-2">
+                    <Plus className="w-4 h-4" /> {uploadingAnn ? 'Đang lưu...' : useAnnSchedule ? 'Lưu hẹn giờ đăng' : 'Đăng thông báo ngay'}
                   </button>
                 </div>
               </form>
 
-              {scheduledAnnouncements.length > 0 && (
+              {scheduledPendingItems.length > 0 && (
                 <div className="space-y-2.5">
-                  <h2 className="text-sm font-extrabold uppercase text-amber-800">Đang hẹn giờ chờ đăng ({scheduledAnnouncements.length})</h2>
-                  {scheduledAnnouncements.map((a) => (
+                  <h2 className="text-sm font-extrabold uppercase text-amber-800">Đang hẹn giờ chờ đăng ({scheduledPendingItems.length})</h2>
+                  {scheduledPendingItems.map((a) => (
                     <div key={`sch-${a.id}`} className="bg-amber-50/70 p-4 rounded-xl border border-amber-200 flex justify-between items-start gap-4">
                       <div className="space-y-1 flex-1">
                         <div className="text-xs font-bold text-amber-800">⏰ Hẹn đăng: {a.publishLabel}</div>
                         <div className="font-bold text-slate-800">{a.title}</div>
                         <p className="text-xs text-slate-600 whitespace-pre-line">{a.cleanContent}</p>
                       </div>
-                      <button onClick={async () => { if (confirm('Xóa thông báo hẹn giờ này?')) { await supabase.from('announcements').delete().eq('id', a.id); fetchPublicData(); } }} className="text-red-500 hover:bg-red-50 p-2 rounded-lg"><Trash2 className="w-4 h-4" /></button>
+                      <button onClick={async () => { if (confirm('Xóa mục hẹn giờ này?')) { await supabase.from('announcements').delete().eq('id', a.id); fetchPublicData(); } }} className="text-red-500 hover:bg-red-50 p-2 rounded-lg"><Trash2 className="w-4 h-4" /></button>
                     </div>
                   ))}
                 </div>
@@ -1638,125 +1747,48 @@ export default function App() {
             </div>
           )}
 
-          {adminTab === 'events' && (
-            <div className="space-y-6">
-              <h1 className="text-2xl font-bold">Quản lý Lịch sinh hoạt cộng đồng</h1>
-              <form onSubmit={async (e) => {
-                e.preventDefault();
-                const pubMs = evtPublishDate ? new Date(`${evtPublishDate}T${(evtPublishTime || '00:00').trim()}:00`).getTime() : 0;
-                const packedDesc = pubMs
-                  ? `${SCHEDULE_META_PREFIX}${JSON.stringify({ publishAtMs: pubMs, publishLabel: `${evtPublishDate} ${evtPublishTime}` })}\n${evtForm.description || ''}`
-                  : (evtForm.description || '');
-                const payload = {
-                  title: evtForm.title,
-                  event_date: evtForm.event_date,
-                  event_time: evtForm.event_time,
-                  location: evtForm.location,
-                  category: evtForm.category,
-                  description: packedDesc,
-                };
-                const { data: insertedRows, error } = await supabase.from('events').insert([payload]).select();
-                if (!error) {
-                  const created = insertedRows?.[0];
-                  let msg = 'Đã thêm lịch sinh hoạt!';
-                  if (sendPushOnEvent) {
-                    const pushRes = await dispatchOneSignalPush({
-                      heading: `Lịch sinh hoạt – ${appSettings.village_name}`,
-                      content: `${evtForm.title} (${evtForm.event_time} ngày ${evtForm.event_date})`,
-                      launchUrl: created ? getPostShareUrl('events', created.id) : siteUrl,
-                      target: 'all',
-                    });
-                    msg = formatPushResultMessage('Đã thêm lịch sinh hoạt!', pushRes);
-                  }
-                  const freshNow = getLocalDateTimeInputs(0);
-                  setEvtForm({ title: '', event_date: '', event_time: '19:30', location: appSettings.cultural_house_name, category: 'Họp dân', description: '' });
-                  setEvtPublishDate(freshNow.dateStr);
-                  setEvtPublishTime(freshNow.timeStr);
-                  fetchPublicData();
-                  showToast(msg, 6000);
-                } else showToast('Lỗi: ' + error.message);
-              }} className="bg-white p-6 rounded-2xl border space-y-3">
-                <div className="grid md:grid-cols-3 gap-3">
-                  <input required placeholder="Tên sự kiện / cuộc họp" value={evtForm.title} onChange={e => setEvtForm({ ...evtForm, title: e.target.value })} className="border px-3 py-2 rounded-xl" />
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-500 mb-0.5">Ngày diễn ra lịch</label>
-                    <input required type="date" value={evtForm.event_date} onChange={e => setEvtForm({ ...evtForm, event_date: e.target.value })} className="w-full border px-3 py-2 rounded-xl text-sm" />
-                  </div>
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-500 mb-0.5">Giờ diễn ra</label>
-                    <input placeholder="Giờ (VD: 19:30)" value={evtForm.event_time} onChange={e => setEvtForm({ ...evtForm, event_time: e.target.value })} className="w-full border px-3 py-2 rounded-xl text-sm" />
-                  </div>
-                  <input placeholder="Địa điểm" value={evtForm.location} onChange={e => setEvtForm({ ...evtForm, location: e.target.value })} className="border px-3 py-2 rounded-xl md:col-span-2" />
-                  <button className="bg-emerald-700 text-white rounded-xl font-semibold py-2">+ Đăng lịch</button>
-                </div>
-
-                <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 grid sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-500 mb-1">Ngày hẹn đăng tin lịch</label>
-                    <input type="date" value={evtPublishDate} onChange={e => setEvtPublishDate(e.target.value)} className="w-full border bg-white px-3 py-1.5 rounded-xl text-xs" />
-                  </div>
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-500 mb-1">Giờ hẹn đăng tin lịch</label>
-                    <input type="time" value={evtPublishTime} onChange={e => setEvtPublishTime(e.target.value)} className="w-full border bg-white px-3 py-1.5 rounded-xl text-xs" />
-                  </div>
-                </div>
-
-                <label className="flex items-center gap-2 text-sm font-semibold text-emerald-800">
-                  <input type="checkbox" checked={sendPushOnEvent} onChange={e => setSendPushOnEvent(e.target.checked)} /> Đẩy chuông báo tới điện thoại bà con
-                </label>
-              </form>
-
-              <div className="space-y-2">
-                {events.map(ev => {
-                  const info = parseEventSchedule(ev);
-                  return (
-                    <div key={ev.id} className="bg-white p-4 rounded-xl border flex justify-between items-center">
-                      <div>
-                        <div className="font-bold">{ev.title}</div>
-                        <div className="text-sm text-slate-500">{ev.event_date} • {ev.event_time} • {ev.location}</div>
-                        {info.publishLabel && <div className="text-[11px] text-emerald-700 mt-0.5">Hẹn đăng: {info.publishLabel}</div>}
-                      </div>
-                      <button onClick={async () => { await supabase.from('events').delete().eq('id', ev.id); fetchPublicData(); }} className="text-red-500 p-2"><Trash2 className="w-4 h-4" /></button>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
           {adminTab === 'news' && (
             <div className="space-y-6">
               <h1 className="text-2xl font-bold">Quản lý Tin tức & Hoạt động</h1>
-              <form onSubmit={async (e) => {
-                e.preventDefault();
-                const { data: insertedRows, error } = await supabase.from('news').insert([newsForm]).select();
-                if (!error) {
-                  const created = insertedRows?.[0];
-                  let msg = 'Đã đăng bài viết!';
-                  if (sendPushOnNews) {
-                    const pushRes = await dispatchOneSignalPush({
-                      heading: `Tin tức mới – ${appSettings.village_name}`,
-                      content: newsForm.title,
-                      launchUrl: created ? getPostShareUrl('news', created.id) : siteUrl,
-                      target: 'all',
-                    });
-                    msg = formatPushResultMessage('Đã đăng bài viết!', pushRes);
-                  }
-                  setNewsForm({ title: '', content: '', category: 'Hoạt động cộng đồng', video_url: '' });
-                  fetchPublicData();
-                  showToast(msg, 6000);
-                } else showToast('Lỗi: ' + error.message);
-              }} className="bg-white p-6 rounded-2xl shadow-sm border space-y-4">
+              <form onSubmit={handleNewsSubmit} className="bg-white p-6 rounded-2xl shadow-sm border space-y-4">
                 <input required placeholder="Tiêu đề bài viết..." value={newsForm.title} onChange={e => setNewsForm({ ...newsForm, title: e.target.value })} className="w-full border px-4 py-2.5 rounded-xl" />
                 <textarea required rows={4} placeholder="Nội dung bài viết..." value={newsForm.content} onChange={e => setNewsForm({ ...newsForm, content: e.target.value })} className="w-full border px-4 py-2.5 rounded-xl" />
                 <input placeholder="Link video YouTube (nếu có)..." value={newsForm.video_url} onChange={e => setNewsForm({ ...newsForm, video_url: e.target.value })} className="w-full border px-4 py-2.5 rounded-xl text-sm" />
-                <div className="flex flex-wrap items-center justify-between gap-3">
+
+                <div className="flex flex-wrap items-center gap-4">
+                  <label className="flex items-center gap-2 text-sm font-semibold text-amber-800">
+                    <input
+                      type="checkbox"
+                      checked={useNewsSchedule}
+                      onChange={e => setUseNewsSchedule(e.target.checked)}
+                    />
+                    <Clock className="w-4 h-4" /> Hẹn ngày giờ đăng
+                  </label>
                   <label className="flex items-center gap-2 text-sm font-semibold text-emerald-800">
                     <input type="checkbox" checked={sendPushOnNews} onChange={e => setSendPushOnNews(e.target.checked)} /> Đẩy chuông báo tới điện thoại bà con
                   </label>
-                  <button className="bg-emerald-700 text-white px-6 py-2.5 rounded-xl font-semibold">Đăng bài viết</button>
+                </div>
+
+                {useNewsSchedule && (
+                  <div className="bg-amber-50/80 p-3.5 rounded-xl border border-amber-200 grid sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[11px] font-bold text-amber-900 mb-1">Ngày hẹn đăng</label>
+                      <input required type="date" value={newsScheduleDate} onChange={e => setNewsScheduleDate(e.target.value)} className="w-full border bg-white px-3 py-2 rounded-xl text-sm" />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-bold text-amber-900 mb-1">Giờ hẹn đăng</label>
+                      <input required type="time" value={newsScheduleTime} onChange={e => setNewsScheduleTime(e.target.value)} className="w-full border bg-white px-3 py-2 rounded-xl text-sm" />
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex justify-end">
+                  <button className="bg-emerald-700 text-white px-6 py-2.5 rounded-xl font-semibold">
+                    {useNewsSchedule ? 'Lưu hẹn giờ đăng tin' : 'Đăng bài viết ngay'}
+                  </button>
                 </div>
               </form>
+
               <div className="space-y-3">
                 {news.map(n => (
                   <div key={n.id} className="bg-white p-4 rounded-xl border flex justify-between items-start gap-4">
@@ -1775,6 +1807,110 @@ export default function App() {
                     <button onClick={async () => { if (confirm('Xóa bài viết?')) { await supabase.from('news').delete().eq('id', n.id); fetchPublicData(); } }} className="text-red-500 p-2"><Trash2 className="w-4 h-4" /></button>
                   </div>
                 ))}
+              </div>
+            </div>
+          )}
+
+          {adminTab === 'events' && (
+            <div className="space-y-6">
+              <h1 className="text-2xl font-bold">Quản lý Lịch sinh hoạt cộng đồng</h1>
+              <form onSubmit={async (e) => {
+                e.preventDefault();
+                const pubMs = useEvtSchedule && evtPublishDate
+                  ? new Date(`${evtPublishDate}T${(evtPublishTime || '00:00').trim()}:00`).getTime()
+                  : 0;
+                const packedDesc = useEvtSchedule && pubMs
+                  ? `${SCHEDULE_META_PREFIX}${JSON.stringify({ publishAtMs: pubMs, publishLabel: `${evtPublishDate} ${evtPublishTime}`, sendPush: sendPushOnEvent, pushedDone: pubMs <= Date.now() + 15000 })}\n${evtForm.description || ''}`
+                  : (evtForm.description || '');
+                const payload = {
+                  title: evtForm.title,
+                  event_date: evtForm.event_date,
+                  event_time: evtForm.event_time,
+                  location: evtForm.location,
+                  category: evtForm.category,
+                  description: packedDesc,
+                };
+                const { data: insertedRows, error } = await supabase.from('events').insert([payload]).select();
+                if (!error) {
+                  const created = insertedRows?.[0];
+                  const isFutureSch = Boolean(useEvtSchedule && pubMs > Date.now() + 15000);
+                  let msg = isFutureSch
+                    ? `Đã hẹn giờ đăng lịch lúc ${evtPublishDate} ${evtPublishTime}!`
+                    : 'Đã thêm lịch sinh hoạt!';
+                  if (!isFutureSch && sendPushOnEvent) {
+                    const pushRes = await dispatchOneSignalPush({
+                      heading: `Lịch sinh hoạt – ${appSettings.village_name}`,
+                      content: `${evtForm.title} (${evtForm.event_time} ngày ${evtForm.event_date})`,
+                      launchUrl: created ? getPostShareUrl('events', created.id) : siteUrl,
+                      target: 'all',
+                    });
+                    msg = formatPushResultMessage('Đã thêm lịch sinh hoạt!', pushRes);
+                  }
+                  const nextLater = getLocalDateTimeInputs(15);
+                  setEvtForm({ title: '', event_date: '', event_time: '19:30', location: appSettings.cultural_house_name, category: 'Họp dân', description: '' });
+                  setUseEvtSchedule(false);
+                  setEvtPublishDate(nextLater.dateStr);
+                  setEvtPublishTime(nextLater.timeStr);
+                  fetchPublicData();
+                  showToast(msg, 6000);
+                } else showToast('Lỗi: ' + error.message);
+              }} className="bg-white p-6 rounded-2xl border space-y-3">
+                <div className="grid md:grid-cols-3 gap-3">
+                  <input required placeholder="Tên sự kiện / cuộc họp" value={evtForm.title} onChange={e => setEvtForm({ ...evtForm, title: e.target.value })} className="border px-3 py-2 rounded-xl" />
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-500 mb-0.5">Ngày diễn ra lịch</label>
+                    <input required type="date" value={evtForm.event_date} onChange={e => setEvtForm({ ...evtForm, event_date: e.target.value })} className="w-full border px-3 py-2 rounded-xl text-sm" />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-500 mb-0.5">Giờ diễn ra</label>
+                    <input placeholder="Giờ (VD: 19:30)" value={evtForm.event_time} onChange={e => setEvtForm({ ...evtForm, event_time: e.target.value })} className="w-full border px-3 py-2 rounded-xl text-sm" />
+                  </div>
+                  <input placeholder="Địa điểm" value={evtForm.location} onChange={e => setEvtForm({ ...evtForm, location: e.target.value })} className="border px-3 py-2 rounded-xl md:col-span-2" />
+                  <button className="bg-emerald-700 text-white rounded-xl font-semibold py-2">+ Đăng lịch</button>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-4">
+                  <label className="flex items-center gap-2 text-sm font-semibold text-amber-800">
+                    <input
+                      type="checkbox"
+                      checked={useEvtSchedule}
+                      onChange={e => setUseEvtSchedule(e.target.checked)}
+                    />
+                    <Clock className="w-4 h-4" /> Hẹn ngày giờ đăng tin lịch
+                  </label>
+                  <label className="flex items-center gap-2 text-sm font-semibold text-emerald-800">
+                    <input type="checkbox" checked={sendPushOnEvent} onChange={e => setSendPushOnEvent(e.target.checked)} /> Đẩy chuông báo tới điện thoại bà con
+                  </label>
+                </div>
+
+                {useEvtSchedule && (
+                  <div className="bg-amber-50/80 p-3 rounded-xl border border-amber-200 grid sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[11px] font-bold text-amber-900 mb-1">Ngày hẹn đăng tin lịch</label>
+                      <input required type="date" value={evtPublishDate} onChange={e => setEvtPublishDate(e.target.value)} className="w-full border bg-white px-3 py-1.5 rounded-xl text-xs" />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-bold text-amber-900 mb-1">Giờ hẹn đăng tin lịch</label>
+                      <input required type="time" value={evtPublishTime} onChange={e => setEvtPublishTime(e.target.value)} className="w-full border bg-white px-3 py-1.5 rounded-xl text-xs" />
+                    </div>
+                  </div>
+                )}
+              </form>
+
+              <div className="space-y-2">
+                {events.map(ev => {
+                  const info = parseEventInfo(ev);
+                  return (
+                    <div key={ev.id} className="bg-white p-4 rounded-xl border flex justify-between items-center">
+                      <div>
+                        <div className="font-bold">{ev.title}</div>
+                        <div className="text-sm text-slate-500">{ev.event_date} • {ev.event_time} • {ev.location}</div>
+                        {info.publishLabel && <div className="text-[11px] text-emerald-700 mt-0.5">Hẹn đăng: {info.publishLabel}</div>}
+                      </div>
+                      <button onClick={async () => { await supabase.from('events').delete().eq('id', ev.id); fetchPublicData(); }} className="text-red-500 p-2"><Trash2 className="w-4 h-4" /></button>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}
@@ -2559,7 +2695,7 @@ export default function App() {
                 <div className="flex items-center justify-between">
                   <div>
                     <div className="font-bold text-lg">Phiên bản hiện tại: {APP_VERSION}</div>
-                    <p className="text-sm text-slate-500">Hỗ trợ hẹn ngày giờ đăng cho Lịch thôn & Thông báo, lọc lịch đã qua ngày và giao diện gọn nhẹ ưu tiên tin nổi bật.</p>
+                    <p className="text-sm text-slate-500">Hỗ trợ chọn tích hẹn ngày giờ đăng cho Thông báo, Tin tức & Lịch thôn; máy chủ tự đẩy chuông dù tắt màn hình.</p>
                   </div>
                   <button onClick={() => window.location.reload()} className="bg-slate-100 hover:bg-slate-200 px-4 py-2 rounded-xl text-sm font-medium flex items-center gap-2"><RefreshCw className="w-4 h-4" /> Kiểm tra cập nhật</button>
                 </div>
@@ -2582,7 +2718,7 @@ export default function App() {
       id: 'feed',
       sub: 'all',
       label: 'Tin & Lịch',
-      desc: `${publishedAnnouncements.length + news.length} tin • ${upcomingEvents.length} lịch`,
+      desc: `${publishedAnnouncements.length + allPublishedNews.length} tin • ${upcomingEvents.length} lịch`,
       icon: Newspaper,
       iconColor: 'text-emerald-700',
       bgColor: 'bg-emerald-50',
@@ -2621,7 +2757,7 @@ export default function App() {
     ? publishedAnnouncements.filter((a) => `${a.title} ${a.cleanContent}`.toLowerCase().includes(qLower))
     : [];
   const matchedNews = qLower
-    ? news.filter((n) => `${n.title} ${n.content} ${n.category}`.toLowerCase().includes(qLower))
+    ? allPublishedNews.filter((n) => `${n.title} ${n.content} ${n.category}`.toLowerCase().includes(qLower))
     : [];
   const matchedOfficials = qLower
     ? officials.filter((o) => `${o.full_name} ${o.role} ${o.phone}`.toLowerCase().includes(qLower))
@@ -2873,13 +3009,13 @@ export default function App() {
                       onClick={() => navigatePublic('feed', 'all')}
                       className="text-xs text-emerald-700 font-bold flex items-center hover:underline"
                     >
-                      Xem tất cả ({publishedAnnouncements.length + news.length}) <ChevronRight className="w-4 h-4" />
+                      Xem tất cả ({publishedAnnouncements.length + allPublishedNews.length}) <ChevronRight className="w-4 h-4" />
                     </button>
                   </div>
 
                   {loading ? (
                     <div className="bg-white p-5 rounded-2xl border border-slate-100 text-sm text-slate-500 text-center">Đang tải thông tin thôn...</div>
-                  ) : publishedAnnouncements.length === 0 && news.length === 0 ? (
+                  ) : publishedAnnouncements.length === 0 && allPublishedNews.length === 0 ? (
                     <div className="bg-white p-5 rounded-2xl border border-slate-100 text-center space-y-2">
                       <p className="text-sm font-semibold text-slate-700">Chào mừng bà con đến với cổng thông tin {appSettings.village_name}</p>
                       <p className="text-xs text-slate-500">Chưa có thông báo mới. Ban thôn sẽ cập nhật kịp thời tại đây.</p>
@@ -2926,36 +3062,19 @@ export default function App() {
                         </div>
                       ))}
 
-                      {news.slice(0, 2).map((n) => (
+                      {allPublishedNews.slice(0, 2).map((n) => (
                         <div key={n.id} className="bg-white p-4 rounded-2xl border-l-4 border-l-teal-500 border border-slate-100 shadow-sm space-y-2">
                           <div className="flex items-center gap-2">
                             <span className="text-[11px] bg-teal-50 text-teal-800 px-2.5 py-0.5 rounded-full font-bold">{n.category}</span>
                             <span className="text-[11px] text-slate-400 ml-auto">{new Date(n.created_at).toLocaleDateString('vi-VN')}</span>
                           </div>
                           <h3
-                            onClick={() => openPostFromKey(`news-${n.id}`)}
+                            onClick={() => navigatePublic('feed', 'news')}
                             className="font-bold text-slate-800 text-base leading-snug cursor-pointer hover:text-emerald-700"
                           >
                             {n.title}
                           </h3>
                           <p className="text-sm text-slate-600 line-clamp-2 whitespace-pre-line">{n.content}</p>
-                          <div className="pt-1 flex items-center justify-between gap-2">
-                            <button
-                              type="button"
-                              onClick={() => openPostFromKey(`news-${n.id}`)}
-                              className="text-xs font-bold text-slate-500 hover:text-emerald-700"
-                            >
-                              Xem bài viết →
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleCopyPostLink('news', n)}
-                              className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 rounded-xl transition"
-                            >
-                              {copiedKey === `news-${n.id}` ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                              {copiedKey === `news-${n.id}` ? 'Đã sao chép' : 'Gửi Zalo'}
-                            </button>
-                          </div>
                         </div>
                       ))}
                     </>
@@ -2972,9 +3091,9 @@ export default function App() {
 
                 <div className="flex gap-1.5 overflow-x-auto bg-white p-1.5 rounded-2xl border border-slate-100 shadow-sm">
                   {[
-                    { id: 'all', label: `Tất cả (${publishedAnnouncements.length + news.length})` },
+                    { id: 'all', label: `Tất cả (${publishedAnnouncements.length + allPublishedNews.length})` },
                     { id: 'announcements', label: `Thông báo (${publishedAnnouncements.length})` },
-                    { id: 'news', label: `Tin tức (${news.length})` },
+                    { id: 'news', label: `Tin tức (${allPublishedNews.length})` },
                     { id: 'events', label: `Lịch thôn (${upcomingEvents.length})` },
                     { id: 'gallery', label: `Ảnh (${galleryItems.length})` },
                   ].map((f) => (
@@ -3036,41 +3155,21 @@ export default function App() {
 
                 {(feedSubTab === 'all' || feedSubTab === 'news') && (
                   <div className="space-y-3">
-                    {news.length === 0 && feedSubTab === 'news' && (
+                    {allPublishedNews.length === 0 && feedSubTab === 'news' && (
                       <p className="text-slate-500 text-sm">Chưa có bài viết nào.</p>
                     )}
-                    {news.map((n) => {
-                      const postKey = `news-${n.id}`;
-                      const isHighlighted = highlightedPost === postKey;
-                      return (
-                        <div
-                          key={n.id}
-                          id={`post-${postKey}`}
-                          className={`bg-white p-5 rounded-2xl border shadow-sm space-y-2 transition ${
-                            isHighlighted ? 'ring-2 ring-emerald-500 border-emerald-400' : 'border-slate-100'
-                          }`}
-                        >
-                          <span className="text-xs bg-teal-100 text-teal-800 px-2.5 py-0.5 rounded-full font-medium">{n.category}</span>
-                          <h3 className="font-bold text-lg text-slate-800">{n.title}</h3>
-                          <p className="text-slate-600 whitespace-pre-line text-sm">{n.content}</p>
-                          {n.video_url && (
-                            <a href={n.video_url} target="_blank" rel="noreferrer" className="inline-block text-sm text-sky-700 font-semibold underline">
-                              ▶ Xem video hoạt động
-                            </a>
-                          )}
-                          <div className="pt-2 flex justify-end">
-                            <button
-                              type="button"
-                              onClick={() => handleCopyPostLink('news', n)}
-                              className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-3.5 py-2 rounded-xl transition"
-                            >
-                              {copiedKey === postKey ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-                              {copiedKey === postKey ? 'Đã sao chép link Zalo' : 'Sao chép link gửi Zalo'}
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    })}
+                    {allPublishedNews.map((n) => (
+                      <div key={n.id} className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-2">
+                        <span className="text-xs bg-teal-100 text-teal-800 px-2.5 py-0.5 rounded-full font-medium">{n.category}</span>
+                        <h3 className="font-bold text-lg text-slate-800">{n.title}</h3>
+                        <p className="text-slate-600 whitespace-pre-line text-sm">{n.content}</p>
+                        {n.video_url && (
+                          <a href={n.video_url} target="_blank" rel="noreferrer" className="inline-block text-sm text-sky-700 font-semibold underline">
+                            ▶ Xem video hoạt động
+                          </a>
+                        )}
+                      </div>
+                    ))}
                   </div>
                 )}
 
@@ -3260,7 +3359,7 @@ export default function App() {
                         <div key={l.id} className="border-t pt-3 mt-3 first:border-0 first:pt-0 first:mt-0">
                           <div className="font-bold text-emerald-800">{l.title}</div>
                           {l.description && <p className="text-xs text-slate-500 mt-0.5">{l.description}</p>}
-                          <ul className="mt-2 space-y-1 text-sm text-slate-600">
+                          <ul className="mt-2 space-y-1.5 text-sm text-slate-600">
                             {customItems.filter((i) => i.list_id === l.id).map((i) => (
                               <li key={i.id}>• <strong>{i.name}</strong> {i.role_or_group && `(${i.role_or_group})`} {i.detail && `– ${i.detail}`}</li>
                             ))}
