@@ -30,29 +30,28 @@ function packScheduleLine({ publishAtMs, publishLabel, sendPush, pushedDone }, b
   return `${SCHEDULE_PREFIX}${JSON.stringify({ publishAtMs, publishLabel, sendPush, pushedDone })}\n${body}`;
 }
 
-async function sendOneSignalBroadcast({ appId, restKey, heading, content, url, imageUrl }) {
-  const authHeader = restKey.startsWith('os_v2_') ? `Key ${restKey}` : `Basic ${restKey}`;
-  const payload = {
-    app_id: appId,
-    headings: { vi: String(heading), en: String(heading) },
-    contents: { vi: String(content), en: String(content) },
-    included_segments: ['Total Subscriptions'],
-    url: url || undefined,
-    chrome_web_image: imageUrl || undefined,
-    ios_attachments: imageUrl ? { id1: imageUrl } : undefined,
-    ios_sound: 'default',
-  };
-
-  const res = await fetch('https://api.onesignal.com/notifications', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json; charset=utf-8',
-      Authorization: authHeader,
-    },
-    body: JSON.stringify(payload),
-  });
-  const data = await res.json();
-  return { ok: res.ok && !(Array.isArray(data.errors) && data.errors.length > 0), data };
+async function triggerSendPush({ siteUrl, heading, content, launchUrl, imageUrl }) {
+  try {
+    const res = await fetch(`${siteUrl}/api/send-push`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json; charset=utf-8' },
+      body: JSON.stringify({
+        heading,
+        content,
+        launchUrl: launchUrl || siteUrl,
+        imageUrl: imageUrl || undefined,
+        target: 'all',
+      }),
+    });
+    const text = await res.text();
+    try {
+      return { status: res.status, data: JSON.parse(text) };
+    } catch (_e) {
+      return { status: res.status, raw: text.slice(0, 200) };
+    }
+  } catch (err) {
+    return { status: 500, error: err?.message || 'Lỗi gọi /api/send-push' };
+  }
 }
 
 export default async function handler(req, res) {
@@ -61,17 +60,6 @@ export default async function handler(req, res) {
     process.env.SUPABASE_SERVICE_ROLE_KEY ||
     process.env.VITE_SUPABASE_ANON_KEY ||
     process.env.SUPABASE_ANON_KEY;
-
-  const appId =
-    process.env.ONESIGNAL_APP_ID ||
-    process.env.VITE_ONESIGNAL_APP_ID ||
-    'e21ec54f-f220-4014-a603-d9c0f23977ab';
-
-  const restKey = (
-    process.env.ONESIGNAL_REST_KEY ||
-    process.env.VITE_ONESIGNAL_REST_KEY ||
-    ''
-  ).trim();
 
   if (!supabaseUrl || !supabaseKey) {
     return res.status(500).json({ ok: false, error: 'Thiếu cấu hình Supabase trên máy chủ.' });
@@ -82,6 +70,7 @@ export default async function handler(req, res) {
   const siteUrl = process.env.SITE_URL || 'https://thon-an-son-thong-minh.vercel.app';
   let processed = 0;
   let skippedNoPermission = 0;
+  const pushResults = [];
 
   try {
     // 1. Xử lý Thông báo & Tin tức hẹn giờ
@@ -101,7 +90,6 @@ export default async function handler(req, res) {
           parsed.body
         );
 
-        // CHỈ gửi chuông khi cập nhật thành công lên Supabase (tránh lặp lại mỗi phút)
         const { data: updatedRows, error: updateErr } = await supabase
           .from('announcements')
           .update({ content: updatedContent })
@@ -113,15 +101,15 @@ export default async function handler(req, res) {
           continue;
         }
 
-        if (parsed.sendPush && restKey) {
-          await sendOneSignalBroadcast({
-            appId,
-            restKey,
+        if (parsed.sendPush) {
+          const result = await triggerSendPush({
+            siteUrl,
             heading: isNewsPost ? 'Tin tức mới – Thôn An Sơn' : 'Thông báo mới – Thôn An Sơn',
             content: row.title || cleanBody.slice(0, 100),
-            url: `${siteUrl}/?post=announcements-${row.id}`,
+            launchUrl: `${siteUrl}/?post=announcements-${row.id}`,
             imageUrl: row.image_url || undefined,
           });
+          pushResults.push({ id: row.id, type: 'announcement', result });
         }
         processed += 1;
       }
@@ -146,14 +134,14 @@ export default async function handler(req, res) {
             continue;
           }
 
-          if (parsed.sendPush && restKey) {
-            await sendOneSignalBroadcast({
-              appId,
-              restKey,
+          if (parsed.sendPush) {
+            const result = await triggerSendPush({
+              siteUrl,
               heading: 'Lịch sinh hoạt – Thôn An Sơn',
               content: `${ev.title} (${ev.event_time || ''} ngày ${ev.event_date || ''})`,
-              url: `${siteUrl}/?post=events-${ev.id}`,
+              launchUrl: `${siteUrl}/?post=events-${ev.id}`,
             });
+            pushResults.push({ id: ev.id, type: 'event', result });
           }
           processed += 1;
         }
@@ -164,10 +152,7 @@ export default async function handler(req, res) {
       ok: true,
       processed,
       skippedNoPermission,
-      note:
-        skippedNoPermission > 0
-          ? 'Cần thêm biến SUPABASE_SERVICE_ROLE_KEY trên Vercel để cron tự đánh dấu đã gửi.'
-          : 'OK',
+      pushResults,
       checkedAt: new Date().toISOString(),
     });
   } catch (err) {
