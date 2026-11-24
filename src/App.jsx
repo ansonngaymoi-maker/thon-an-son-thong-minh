@@ -5,13 +5,16 @@ import {
   CheckCircle, AlertTriangle, Download, Printer, ListPlus,
   Home as HomeIcon, Lock, RefreshCw, ChevronRight, X,
   Image as ImageIcon, Map, PhoneCall, ExternalLink, Copy, Check, ArrowDown,
-  Settings, FileSpreadsheet, Upload, Lightbulb
+  Settings, FileSpreadsheet, Upload, Lightbulb, HeartHandshake, Pencil, Wallet
 } from 'lucide-react';
 import { supabase, isConfigured } from './supabaseClient';
 
-const APP_VERSION = 'v1.5.5';
+const APP_VERSION = 'v1.5.6';
 const SEEN_IDS_KEY = 'thon_an_son_seen_post_ids_v1';
 const SETTINGS_STORAGE_KEY = 'thon_an_son_app_settings_v1';
+const DONATION_LIST_MARKER = '__THON_AN_SON_UNG_HO__';
+const LEDGER_LIST_MARKER = '__THON_AN_SON_THU_CHI__';
+
 const ONESIGNAL_APP_ID =
   (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_ONESIGNAL_APP_ID) ||
   'e21ec54f-f220-4014-a603-d9c0f23977ab';
@@ -75,6 +78,36 @@ const buildCulturalHouseExternalUrl = (settings) => {
 
 const isSuggestionRecord = (fb) => String(fb?.category || '').startsWith('[GÓP Ý]');
 
+const parseMoneyAmount = (raw) => {
+  if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+  const digits = String(raw || '').replace(/[^\d-]/g, '');
+  const n = parseInt(digits, 10);
+  return Number.isFinite(n) ? n : 0;
+};
+
+const formatVND = (num) => {
+  const val = Number(num) || 0;
+  return `${val.toLocaleString('vi-VN')} đ`;
+};
+
+const encodeMeta = (obj) => {
+  try {
+    return JSON.stringify(obj);
+  } catch (_e) {
+    return '';
+  }
+};
+
+const decodeMeta = (raw, fallback = {}) => {
+  if (!raw) return fallback;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? { ...fallback, ...parsed } : fallback;
+  } catch (_e) {
+    return { ...fallback, note: String(raw) };
+  }
+};
+
 export default function App() {
   const isInitialAdmin = typeof window !== 'undefined' && window.location.pathname.startsWith('/admin');
   const [mode, setMode] = useState(isInitialAdmin ? 'admin' : 'public');
@@ -112,7 +145,7 @@ export default function App() {
 
   // Admin private data
   const [feedbacks, setFeedbacks] = useState([]);
-  const [feedbackFilter, setFeedbackFilter] = useState('all'); // 'all' | 'feedback' | 'suggestion'
+  const [feedbackFilter, setFeedbackFilter] = useState('all');
   const [households, setHouseholds] = useState([]);
   const [residents, setResidents] = useState([]);
 
@@ -120,6 +153,30 @@ export default function App() {
   const [excelFileName, setExcelFileName] = useState('');
   const [excelPreviewRows, setExcelPreviewRows] = useState([]);
   const [importingExcel, setImportingExcel] = useState(false);
+
+  // Finance & Donations states (Ủng hộ & Thu chi)
+  const [financePublicSubTab, setFinancePublicSubTab] = useState('donations'); // 'donations' | 'ledger'
+  const [searchFinance, setSearchFinance] = useState('');
+  const [editingDonationId, setEditingDonationId] = useState(null);
+  const [donationForm, setDonationForm] = useState({
+    donor_name: '',
+    area_or_org: '',
+    amount: '',
+    in_kind: '',
+    campaign: 'Vận động xây dựng & hoạt động thôn',
+    date: new Date().toISOString().slice(0, 10),
+    note: '',
+  });
+  const [editingLedgerId, setEditingLedgerId] = useState(null);
+  const [ledgerForm, setLedgerForm] = useState({
+    type: 'thu', // 'thu' | 'chi'
+    title: '',
+    amount: '',
+    date: new Date().toISOString().slice(0, 10),
+    campaign: 'Quỹ vận động thôn An Sơn',
+    note: '',
+  });
+  const [savingFinance, setSavingFinance] = useState(false);
 
   // UI states
   const [searchOfficial, setSearchOfficial] = useState('');
@@ -146,10 +203,10 @@ export default function App() {
   const [sendPushOnNews, setSendPushOnNews] = useState(true);
   const [sendPushOnEvent, setSendPushOnEvent] = useState(true);
 
-  // Feedback form (Phản ánh kiến nghị)
+  // Feedback form
   const [fbForm, setFbForm] = useState({ sender_name: '', sender_phone: '', category: 'Đường làng, ngõ xóm', content: '' });
 
-  // Suggestion form (Góp ý xây dựng thôn - bắt buộc đầy đủ thông tin người góp ý)
+  // Suggestion form
   const [sugForm, setSugForm] = useState({
     sender_name: '',
     sender_phone: '',
@@ -491,7 +548,7 @@ export default function App() {
         supabase.from('officials').select('*').order('sort_order', { ascending: true }),
         supabase.from('events').select('*').order('event_date', { ascending: true }),
         supabase.from('custom_lists').select('*').order('created_at', { ascending: false }),
-        supabase.from('custom_list_items').select('*').order('created_at', { ascending: true }),
+        supabase.from('custom_list_items').select('*').order('created_at', { ascending: false }),
         supabase.from('app_settings').select('*').limit(1),
       ]);
       const annRows = a.data || [];
@@ -525,6 +582,157 @@ export default function App() {
     if (fb.data) setFeedbacks(fb.data);
     if (hh.data) setHouseholds(hh.data);
     if (res.data) setResidents(res.data);
+  };
+
+  // Đảm bảo có danh sách hệ thống chứa dữ liệu Ủng hộ & Thu chi công khai
+  const ensureSystemFinanceList = async (marker, title, description) => {
+    const existing = customLists.find((l) => l.description === marker);
+    if (existing) return existing.id;
+    const { data, error } = await supabase
+      .from('custom_lists')
+      .insert([{ title, description: marker, is_public: true, year: new Date().getFullYear() }])
+      .select();
+    if (error || !data?.[0]) {
+      throw new Error(error?.message || 'Không khởi tạo được danh sách công khai');
+    }
+    return data[0].id;
+  };
+
+  const handleSaveDonation = async (e) => {
+    e.preventDefault();
+    if (!donationForm.donor_name.trim()) return;
+    setSavingFinance(true);
+    try {
+      const listId = await ensureSystemFinanceList(
+        DONATION_LIST_MARKER,
+        'Danh sách nhân dân & mạnh thường quân ủng hộ',
+        'Công khai danh sách đóng góp, ủng hộ thôn An Sơn'
+      );
+      const amountNum = parseMoneyAmount(donationForm.amount);
+      const payload = {
+        list_id: listId,
+        name: donationForm.donor_name.trim(),
+        role_or_group: donationForm.area_or_org.trim(),
+        phone: String(amountNum),
+        detail: donationForm.campaign.trim() || 'Ủng hộ thôn An Sơn',
+        notes: encodeMeta({
+          amount: amountNum,
+          in_kind: donationForm.in_kind.trim(),
+          date: donationForm.date,
+          note: donationForm.note.trim(),
+        }),
+      };
+
+      if (editingDonationId) {
+        const { error } = await supabase.from('custom_list_items').update(payload).eq('id', editingDonationId);
+        if (error) throw new Error(error.message);
+        showToast('Đã cập nhật thông tin người ủng hộ!');
+      } else {
+        const { error } = await supabase.from('custom_list_items').insert([payload]);
+        if (error) throw new Error(error.message);
+        showToast('Đã đăng công khai thông tin ủng hộ cho bà con xem!');
+      }
+
+      setEditingDonationId(null);
+      setDonationForm({
+        donor_name: '',
+        area_or_org: '',
+        amount: '',
+        in_kind: '',
+        campaign: 'Vận động xây dựng & hoạt động thôn',
+        date: new Date().toISOString().slice(0, 10),
+        note: '',
+      });
+      await fetchPublicData();
+    } catch (err) {
+      showToast('Lỗi lưu danh sách ủng hộ: ' + err.message);
+    } finally {
+      setSavingFinance(false);
+    }
+  };
+
+  const handleStartEditDonation = (item) => {
+    const meta = decodeMeta(item.notes, { amount: parseMoneyAmount(item.phone), in_kind: '', date: '', note: '' });
+    setEditingDonationId(item.id);
+    setDonationForm({
+      donor_name: item.name || '',
+      area_or_org: item.role_or_group || '',
+      amount: meta.amount ? String(meta.amount) : '',
+      in_kind: meta.in_kind || '',
+      campaign: item.detail || 'Vận động xây dựng & hoạt động thôn',
+      date: meta.date || new Date().toISOString().slice(0, 10),
+      note: meta.note || '',
+    });
+  };
+
+  const handleSaveLedger = async (e) => {
+    e.preventDefault();
+    if (!ledgerForm.title.trim()) return;
+    setSavingFinance(true);
+    try {
+      const listId = await ensureSystemFinanceList(
+        LEDGER_LIST_MARKER,
+        'Công khai Thu – Chi đóng góp ủng hộ thôn',
+        'Sổ thu chi minh bạch phục vụ cộng đồng'
+      );
+      const amountNum = parseMoneyAmount(ledgerForm.amount);
+      const payload = {
+        list_id: listId,
+        name: ledgerForm.title.trim(),
+        role_or_group: ledgerForm.type === 'chi' ? 'chi' : 'thu',
+        phone: String(amountNum),
+        detail: ledgerForm.campaign.trim() || 'Quỹ vận động thôn An Sơn',
+        notes: encodeMeta({
+          type: ledgerForm.type === 'chi' ? 'chi' : 'thu',
+          amount: amountNum,
+          date: ledgerForm.date,
+          note: ledgerForm.note.trim(),
+        }),
+      };
+
+      if (editingLedgerId) {
+        const { error } = await supabase.from('custom_list_items').update(payload).eq('id', editingLedgerId);
+        if (error) throw new Error(error.message);
+        showToast('Đã cập nhật khoản thu/chi!');
+      } else {
+        const { error } = await supabase.from('custom_list_items').insert([payload]);
+        if (error) throw new Error(error.message);
+        showToast('Đã đăng công khai khoản thu/chi mới!');
+      }
+
+      setEditingLedgerId(null);
+      setLedgerForm({
+        type: 'thu',
+        title: '',
+        amount: '',
+        date: new Date().toISOString().slice(0, 10),
+        campaign: 'Quỹ vận động thôn An Sơn',
+        note: '',
+      });
+      await fetchPublicData();
+    } catch (err) {
+      showToast('Lỗi lưu thu chi: ' + err.message);
+    } finally {
+      setSavingFinance(false);
+    }
+  };
+
+  const handleStartEditLedger = (item) => {
+    const meta = decodeMeta(item.notes, {
+      type: item.role_or_group === 'chi' ? 'chi' : 'thu',
+      amount: parseMoneyAmount(item.phone),
+      date: '',
+      note: '',
+    });
+    setEditingLedgerId(item.id);
+    setLedgerForm({
+      type: meta.type === 'chi' ? 'chi' : 'thu',
+      title: item.name || '',
+      amount: meta.amount ? String(meta.amount) : '',
+      date: meta.date || new Date().toISOString().slice(0, 10),
+      campaign: item.detail || 'Quỹ vận động thôn An Sơn',
+      note: meta.note || '',
+    });
   };
 
   const handleSaveSettings = async (e) => {
@@ -845,6 +1053,52 @@ export default function App() {
     );
   }
 
+  // Dữ liệu đã chuẩn hóa cho Ủng hộ & Thu chi
+  const donationSystemList = customLists.find((l) => l.description === DONATION_LIST_MARKER);
+  const ledgerSystemList = customLists.find((l) => l.description === LEDGER_LIST_MARKER);
+  const regularCustomLists = customLists.filter(
+    (l) => l.description !== DONATION_LIST_MARKER && l.description !== LEDGER_LIST_MARKER
+  );
+
+  const donationItems = (donationSystemList
+    ? customItems.filter((i) => i.list_id === donationSystemList.id)
+    : []
+  ).map((item) => {
+    const meta = decodeMeta(item.notes, { amount: parseMoneyAmount(item.phone), in_kind: '', date: '', note: '' });
+    return {
+      ...item,
+      amount: parseMoneyAmount(meta.amount ?? item.phone),
+      in_kind: meta.in_kind || '',
+      date: meta.date || (item.created_at ? item.created_at.slice(0, 10) : ''),
+      note: meta.note || '',
+    };
+  });
+
+  const ledgerItems = (ledgerSystemList
+    ? customItems.filter((i) => i.list_id === ledgerSystemList.id)
+    : []
+  ).map((item) => {
+    const meta = decodeMeta(item.notes, {
+      type: item.role_or_group === 'chi' ? 'chi' : 'thu',
+      amount: parseMoneyAmount(item.phone),
+      date: '',
+      note: '',
+    });
+    return {
+      ...item,
+      entryType: meta.type === 'chi' ? 'chi' : 'thu',
+      amount: parseMoneyAmount(meta.amount ?? item.phone),
+      date: meta.date || (item.created_at ? item.created_at.slice(0, 10) : ''),
+      note: meta.note || '',
+    };
+  });
+
+  const totalDonatedMoney = donationItems.reduce((sum, d) => sum + d.amount, 0);
+  const totalLedgerThu = ledgerItems.filter((l) => l.entryType === 'thu').reduce((sum, l) => sum + l.amount, 0);
+  const totalLedgerChi = ledgerItems.filter((l) => l.entryType === 'chi').reduce((sum, l) => sum + l.amount, 0);
+  const totalCombinedThu = totalDonatedMoney + totalLedgerThu;
+  const currentFundBalance = totalCombinedThu - totalLedgerChi;
+
   const todayStr = new Date().toLocaleDateString('vi-VN', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' });
   const galleryItems = announcements.filter(a => a.image_url);
   const culturalHouseMapSrc = buildCulturalHouseMapUrl(appSettings);
@@ -896,6 +1150,7 @@ export default function App() {
       { id: 'overview', label: 'Tổng quan', icon: HomeIcon, color: 'bg-slate-100 text-slate-700' },
       { id: 'announcements', label: 'Thông báo', icon: Bell, color: 'bg-red-50 text-red-600' },
       { id: 'news', label: 'Tin tức', icon: Newspaper, color: 'bg-emerald-50 text-emerald-700' },
+      { id: 'finance', label: 'Ủng hộ & Thu chi', icon: HeartHandshake, color: 'bg-rose-50 text-rose-600' },
       { id: 'officials', label: 'Cán bộ', icon: Users, color: 'bg-sky-50 text-sky-700' },
       { id: 'events', label: 'Lịch thôn', icon: Calendar, color: 'bg-teal-50 text-teal-700' },
       { id: 'feedbacks', label: `Phản ánh & Góp ý (${newReceivedCount})`, icon: MessageSquare, color: 'bg-amber-50 text-amber-700' },
@@ -961,7 +1216,7 @@ export default function App() {
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 {[
                   { id: 'announcements', label: 'Thông báo', val: announcements.length, color: 'bg-emerald-600 hover:bg-emerald-700' },
-                  { id: 'officials', label: 'Cán bộ, đoàn thể', val: officials.length, color: 'bg-sky-600 hover:bg-sky-700' },
+                  { id: 'finance', label: 'Lượt ủng hộ / Thu chi', val: donationItems.length + ledgerItems.length, color: 'bg-rose-600 hover:bg-rose-700' },
                   { id: 'households', label: 'Hộ dân (Nội bộ)', val: households.length, color: 'bg-indigo-600 hover:bg-indigo-700' },
                   { id: 'feedbacks', label: 'Phản ánh & Góp ý mới', val: newReceivedCount, color: 'bg-amber-600 hover:bg-amber-700' },
                 ].map((c) => (
@@ -1009,6 +1264,364 @@ export default function App() {
                 <h3 className="font-bold text-slate-800">Trạng thái bảo mật & Thông báo đẩy ({APP_VERSION})</h3>
                 <p className="text-sm text-emerald-700 flex items-center gap-2"><CheckCircle className="w-4 h-4 shrink-0" /> Đã kết nối cơ sở dữ liệu Supabase thời gian thực.</p>
                 <p className="text-sm text-emerald-700 flex items-center gap-2"><CheckCircle className="w-4 h-4 shrink-0" /> Đã kích hoạt cổng gửi thông báo đẩy máy chủ /api/send-push.</p>
+              </div>
+            </div>
+          )}
+
+          {adminTab === 'finance' && (
+            <div className="space-y-6">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h1 className="text-2xl font-bold text-slate-800">Quản lý Ủng hộ & Công khai Thu – Chi</h1>
+                  <p className="text-xs text-slate-500 mt-0.5">Ban quản trị đăng và chỉnh sửa tại đây; bà con nhân dân xem công khai ở mục "Ủng hộ & Thu chi".</p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      exportCSV(
+                        'danh-sach-ung-ho-thon-an-son.csv',
+                        donationItems.map((d) => ({
+                          Ho_ten: d.name,
+                          Xom_don_vi: d.role_or_group,
+                          So_tien_VND: d.amount,
+                          Hien_vat: d.in_kind,
+                          Dot_van_dong: d.detail,
+                          Ngay: d.date,
+                          Ghi_chu: d.note,
+                        }))
+                      )
+                    }
+                    className="bg-emerald-700 text-white px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5"
+                  >
+                    <Download className="w-4 h-4" /> Xuất Excel Ủng hộ
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      exportCSV(
+                        'cong-khai-thu-chi-thon-an-son.csv',
+                        ledgerItems.map((l) => ({
+                          Loai: l.entryType === 'chi' ? 'Chi' : 'Thu',
+                          Noi_dung: l.name,
+                          So_tien_VND: l.amount,
+                          Quy_dot: l.detail,
+                          Ngay: l.date,
+                          Ghi_chu: l.note,
+                        }))
+                      )
+                    }
+                    className="bg-sky-700 text-white px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5"
+                  >
+                    <Download className="w-4 h-4" /> Xuất Excel Thu – Chi
+                  </button>
+                </div>
+              </div>
+
+              {/* Thẻ tổng hợp tài chính */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="bg-white p-5 rounded-2xl border border-emerald-200 shadow-sm">
+                  <div className="text-xs font-bold uppercase text-emerald-700">Tổng thu & Ủng hộ tiền mặt</div>
+                  <div className="text-2xl font-extrabold text-emerald-800 mt-1">{formatVND(totalCombinedThu)}</div>
+                  <div className="text-[11px] text-slate-500 mt-1">Ủng hộ: {formatVND(totalDonatedMoney)} • Thu khác: {formatVND(totalLedgerThu)}</div>
+                </div>
+                <div className="bg-white p-5 rounded-2xl border border-rose-200 shadow-sm">
+                  <div className="text-xs font-bold uppercase text-rose-700">Tổng đã chi</div>
+                  <div className="text-2xl font-extrabold text-rose-700 mt-1">{formatVND(totalLedgerChi)}</div>
+                  <div className="text-[11px] text-slate-500 mt-1">{ledgerItems.filter((l) => l.entryType === 'chi').length} khoản chi đã công khai</div>
+                </div>
+                <div className="bg-white p-5 rounded-2xl border border-sky-200 shadow-sm">
+                  <div className="text-xs font-bold uppercase text-sky-700">Số dư quỹ hiện còn</div>
+                  <div className="text-2xl font-extrabold text-sky-800 mt-1">{formatVND(currentFundBalance)}</div>
+                  <div className="text-[11px] text-slate-500 mt-1">Tự động cập nhật khi thêm/sửa</div>
+                </div>
+              </div>
+
+              {/* Phần 1: Quản lý danh sách nhân dân ủng hộ */}
+              <div className="bg-white p-5 md:p-6 rounded-2xl border border-emerald-200 shadow-sm space-y-4">
+                <div className="flex items-center justify-between">
+                  <h2 className="font-bold text-lg text-emerald-900 flex items-center gap-2">
+                    <HeartHandshake className="w-5 h-5 text-rose-600" />
+                    {editingDonationId ? 'Chỉnh sửa thông tin người ủng hộ' : '+ Đăng người dân / mạnh thường quân ủng hộ'}
+                  </h2>
+                  {editingDonationId && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingDonationId(null);
+                        setDonationForm({
+                          donor_name: '',
+                          area_or_org: '',
+                          amount: '',
+                          in_kind: '',
+                          campaign: 'Vận động xây dựng & hoạt động thôn',
+                          date: new Date().toISOString().slice(0, 10),
+                          note: '',
+                        });
+                      }}
+                      className="text-xs text-slate-500 hover:text-slate-800 underline"
+                    >
+                      Hủy sửa
+                    </button>
+                  )}
+                </div>
+
+                <form onSubmit={handleSaveDonation} className="grid md:grid-cols-3 gap-3">
+                  <input
+                    required
+                    placeholder="Họ và tên người ủng hộ / Gia đình *"
+                    value={donationForm.donor_name}
+                    onChange={e => setDonationForm({ ...donationForm, donor_name: e.target.value })}
+                    className="border px-3.5 py-2.5 rounded-xl text-sm"
+                  />
+                  <input
+                    placeholder="Xóm / Khu vực / Đơn vị (VD: Xóm 1)"
+                    value={donationForm.area_or_org}
+                    onChange={e => setDonationForm({ ...donationForm, area_or_org: e.target.value })}
+                    className="border px-3.5 py-2.5 rounded-xl text-sm"
+                  />
+                  <input
+                    type="number"
+                    min={0}
+                    placeholder="Số tiền ủng hộ (VNĐ, VD: 500000)"
+                    value={donationForm.amount}
+                    onChange={e => setDonationForm({ ...donationForm, amount: e.target.value })}
+                    className="border px-3.5 py-2.5 rounded-xl text-sm"
+                  />
+                  <input
+                    placeholder="Hiện vật ủng hộ (nếu có, VD: 5 bao xi măng)"
+                    value={donationForm.in_kind}
+                    onChange={e => setDonationForm({ ...donationForm, in_kind: e.target.value })}
+                    className="border px-3.5 py-2.5 rounded-xl text-sm"
+                  />
+                  <input
+                    placeholder="Đợt vận động / Mục đích"
+                    value={donationForm.campaign}
+                    onChange={e => setDonationForm({ ...donationForm, campaign: e.target.value })}
+                    className="border px-3.5 py-2.5 rounded-xl text-sm"
+                  />
+                  <input
+                    type="date"
+                    value={donationForm.date}
+                    onChange={e => setDonationForm({ ...donationForm, date: e.target.value })}
+                    className="border px-3.5 py-2.5 rounded-xl text-sm"
+                  />
+                  <input
+                    placeholder="Ghi chú thêm (tùy chọn)"
+                    value={donationForm.note}
+                    onChange={e => setDonationForm({ ...donationForm, note: e.target.value })}
+                    className="border px-3.5 py-2.5 rounded-xl text-sm md:col-span-2"
+                  />
+                  <button
+                    disabled={savingFinance}
+                    className="bg-emerald-700 hover:bg-emerald-800 text-white font-semibold rounded-xl py-2.5 text-sm disabled:opacity-60"
+                  >
+                    {savingFinance ? 'Đang lưu...' : editingDonationId ? 'Cập nhật ủng hộ' : '+ Đăng công khai ủng hộ'}
+                  </button>
+                </form>
+
+                <div className="overflow-x-auto border rounded-xl">
+                  <table className="w-full text-sm text-left">
+                    <thead className="bg-slate-50 border-b text-xs uppercase text-slate-600">
+                      <tr>
+                        <th className="p-3">Người ủng hộ</th>
+                        <th className="p-3">Xóm / Đơn vị</th>
+                        <th className="p-3">Số tiền / Hiện vật</th>
+                        <th className="p-3">Đợt vận động</th>
+                        <th className="p-3">Ngày</th>
+                        <th className="p-3 text-right">Thao tác</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {donationItems.length === 0 ? (
+                        <tr>
+                          <td colSpan={6} className="p-4 text-center text-slate-400 text-xs">Chưa có dữ liệu người ủng hộ nào.</td>
+                        </tr>
+                      ) : (
+                        donationItems.map((d) => (
+                          <tr key={d.id} className="border-b last:border-0 hover:bg-slate-50/70">
+                            <td className="p-3 font-bold text-slate-800">{d.name}</td>
+                            <td className="p-3 text-slate-600">{d.role_or_group || '—'}</td>
+                            <td className="p-3">
+                              {d.amount > 0 && <div className="font-bold text-emerald-700">{formatVND(d.amount)}</div>}
+                              {d.in_kind && <div className="text-xs text-amber-700 font-medium">+ {d.in_kind}</div>}
+                              {d.amount === 0 && !d.in_kind && <span className="text-slate-400">0 đ</span>}
+                            </td>
+                            <td className="p-3 text-xs text-slate-600">{d.detail}</td>
+                            <td className="p-3 text-xs text-slate-500">{d.date}</td>
+                            <td className="p-3 text-right space-x-1 whitespace-nowrap">
+                              <button
+                                type="button"
+                                onClick={() => handleStartEditDonation(d)}
+                                className="inline-flex items-center gap-1 text-xs font-semibold text-sky-700 bg-sky-50 hover:bg-sky-100 px-2.5 py-1 rounded-lg"
+                                title="Sửa dòng này"
+                              >
+                                <Pencil className="w-3.5 h-3.5" /> Sửa
+                              </button>
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  if (confirm(`Xóa khoản ủng hộ của "${d.name}"?`)) {
+                                    await supabase.from('custom_list_items').delete().eq('id', d.id);
+                                    fetchPublicData();
+                                  }
+                                }}
+                                className="inline-flex items-center text-red-500 hover:bg-red-50 p-1.5 rounded-lg"
+                                title="Xóa"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Phần 2: Quản lý công khai Thu - Chi */}
+              <div className="bg-white p-5 md:p-6 rounded-2xl border border-sky-200 shadow-sm space-y-4">
+                <div className="flex items-center justify-between">
+                  <h2 className="font-bold text-lg text-sky-900 flex items-center gap-2">
+                    <Wallet className="w-5 h-5 text-sky-700" />
+                    {editingLedgerId ? 'Chỉnh sửa khoản Thu – Chi' : '+ Đăng công khai khoản Thu – Chi'}
+                  </h2>
+                  {editingLedgerId && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingLedgerId(null);
+                        setLedgerForm({
+                          type: 'thu',
+                          title: '',
+                          amount: '',
+                          date: new Date().toISOString().slice(0, 10),
+                          campaign: 'Quỹ vận động thôn An Sơn',
+                          note: '',
+                        });
+                      }}
+                      className="text-xs text-slate-500 hover:text-slate-800 underline"
+                    >
+                      Hủy sửa
+                    </button>
+                  )}
+                </div>
+
+                <form onSubmit={handleSaveLedger} className="grid md:grid-cols-3 gap-3">
+                  <select
+                    value={ledgerForm.type}
+                    onChange={e => setLedgerForm({ ...ledgerForm, type: e.target.value })}
+                    className="border px-3.5 py-2.5 rounded-xl text-sm font-semibold"
+                  >
+                    <option value="thu">Khoản THU (+)</option>
+                    <option value="chi">Khoản CHI (-)</option>
+                  </select>
+                  <input
+                    required
+                    placeholder="Nội dung khoản thu / chi *"
+                    value={ledgerForm.title}
+                    onChange={e => setLedgerForm({ ...ledgerForm, title: e.target.value })}
+                    className="border px-3.5 py-2.5 rounded-xl text-sm md:col-span-2"
+                  />
+                  <input
+                    required
+                    type="number"
+                    min={0}
+                    placeholder="Số tiền (VNĐ) *"
+                    value={ledgerForm.amount}
+                    onChange={e => setLedgerForm({ ...ledgerForm, amount: e.target.value })}
+                    className="border px-3.5 py-2.5 rounded-xl text-sm"
+                  />
+                  <input
+                    placeholder="Nguồn quỹ / Đợt hoạt động"
+                    value={ledgerForm.campaign}
+                    onChange={e => setLedgerForm({ ...ledgerForm, campaign: e.target.value })}
+                    className="border px-3.5 py-2.5 rounded-xl text-sm"
+                  />
+                  <input
+                    type="date"
+                    value={ledgerForm.date}
+                    onChange={e => setLedgerForm({ ...ledgerForm, date: e.target.value })}
+                    className="border px-3.5 py-2.5 rounded-xl text-sm"
+                  />
+                  <input
+                    placeholder="Chứng từ / Người thực hiện / Ghi chú"
+                    value={ledgerForm.note}
+                    onChange={e => setLedgerForm({ ...ledgerForm, note: e.target.value })}
+                    className="border px-3.5 py-2.5 rounded-xl text-sm md:col-span-2"
+                  />
+                  <button
+                    disabled={savingFinance}
+                    className="bg-sky-700 hover:bg-sky-800 text-white font-semibold rounded-xl py-2.5 text-sm disabled:opacity-60"
+                  >
+                    {savingFinance ? 'Đang lưu...' : editingLedgerId ? 'Cập nhật Thu – Chi' : '+ Đăng công khai Thu – Chi'}
+                  </button>
+                </form>
+
+                <div className="overflow-x-auto border rounded-xl">
+                  <table className="w-full text-sm text-left">
+                    <thead className="bg-slate-50 border-b text-xs uppercase text-slate-600">
+                      <tr>
+                        <th className="p-3">Loại</th>
+                        <th className="p-3">Nội dung khoản thu / chi</th>
+                        <th className="p-3">Số tiền</th>
+                        <th className="p-3">Quỹ / Đợt</th>
+                        <th className="p-3">Ngày</th>
+                        <th className="p-3 text-right">Thao tác</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {ledgerItems.length === 0 ? (
+                        <tr>
+                          <td colSpan={6} className="p-4 text-center text-slate-400 text-xs">Chưa có khoản thu chi nào được đăng tải.</td>
+                        </tr>
+                      ) : (
+                        ledgerItems.map((l) => (
+                          <tr key={l.id} className="border-b last:border-0 hover:bg-slate-50/70">
+                            <td className="p-3">
+                              <span className={`text-xs font-extrabold px-2.5 py-0.5 rounded-full ${l.entryType === 'chi' ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-800'}`}>
+                                {l.entryType === 'chi' ? 'CHI' : 'THU'}
+                              </span>
+                            </td>
+                            <td className="p-3">
+                              <div className="font-bold text-slate-800">{l.name}</div>
+                              {l.note && <div className="text-xs text-slate-500">{l.note}</div>}
+                            </td>
+                            <td className={`p-3 font-bold ${l.entryType === 'chi' ? 'text-rose-700' : 'text-emerald-700'}`}>
+                              {l.entryType === 'chi' ? '-' : '+'}{formatVND(l.amount)}
+                            </td>
+                            <td className="p-3 text-xs text-slate-600">{l.detail}</td>
+                            <td className="p-3 text-xs text-slate-500">{l.date}</td>
+                            <td className="p-3 text-right space-x-1 whitespace-nowrap">
+                              <button
+                                type="button"
+                                onClick={() => handleStartEditLedger(l)}
+                                className="inline-flex items-center gap-1 text-xs font-semibold text-sky-700 bg-sky-50 hover:bg-sky-100 px-2.5 py-1 rounded-lg"
+                                title="Sửa dòng này"
+                              >
+                                <Pencil className="w-3.5 h-3.5" /> Sửa
+                              </button>
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  if (confirm(`Xóa khoản "${l.name}"?`)) {
+                                    await supabase.from('custom_list_items').delete().eq('id', l.id);
+                                    fetchPublicData();
+                                  }
+                                }}
+                                className="inline-flex items-center text-red-500 hover:bg-red-50 p-1.5 rounded-lg"
+                                title="Xóa"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
           )}
@@ -1491,7 +2104,10 @@ export default function App() {
 
           {adminTab === 'lists' && (
             <div className="space-y-6">
-              <h1 className="text-2xl font-bold">Danh sách bổ sung của thôn (Mở rộng)</h1>
+              <div>
+                <h1 className="text-2xl font-bold">Danh sách bổ sung của thôn (Mở rộng)</h1>
+                <p className="text-xs text-slate-500 mt-0.5">Gợi ý: Tổ tự quản & Tổ công nghệ số, Gia đình văn hóa tiêu biểu, Hộ chính sách thăm hỏi lễ Tết, Điểm camera an ninh...</p>
+              </div>
               <form onSubmit={async (e) => {
                 e.preventDefault();
                 const { error } = await supabase.from('custom_lists').insert([listForm]);
@@ -1499,7 +2115,7 @@ export default function App() {
               }} className="bg-white p-5 rounded-2xl border space-y-3">
                 <h3 className="font-bold text-emerald-800">+ TẠO DANH SÁCH MỚI</h3>
                 <div className="grid md:grid-cols-3 gap-3">
-                  <input required placeholder="Tên danh sách (VD: Mạnh thường quân 2026)" value={listForm.title} onChange={e => setListForm({ ...listForm, title: e.target.value })} className="border px-3 py-2 rounded-xl text-sm" />
+                  <input required placeholder="Tên danh sách (VD: Tổ công nghệ số thôn)" value={listForm.title} onChange={e => setListForm({ ...listForm, title: e.target.value })} className="border px-3 py-2 rounded-xl text-sm" />
                   <input placeholder="Mô tả ngắn" value={listForm.description} onChange={e => setListForm({ ...listForm, description: e.target.value })} className="border px-3 py-2 rounded-xl text-sm" />
                   <label className="flex items-center gap-2 text-sm px-2">
                     <input type="checkbox" checked={listForm.is_public} onChange={e => setListForm({ ...listForm, is_public: e.target.checked })} /> Công khai cho bà con xem
@@ -1508,7 +2124,7 @@ export default function App() {
                 <button className="bg-emerald-700 text-white px-5 py-2 rounded-xl text-sm font-semibold">Tạo danh sách</button>
               </form>
 
-              {customLists.length > 0 && (
+              {regularCustomLists.length > 0 && (
                 <form onSubmit={async (e) => {
                   e.preventDefault();
                   if (!itemForm.list_id) return showToast('Vui lòng chọn danh sách');
@@ -1519,18 +2135,18 @@ export default function App() {
                   <div className="grid md:grid-cols-4 gap-3">
                     <select required value={itemForm.list_id} onChange={e => setItemForm({ ...itemForm, list_id: e.target.value })} className="border px-3 py-2 rounded-xl text-sm">
                       <option value="">-- Chọn danh sách --</option>
-                      {customLists.map(l => <option key={l.id} value={l.id}>{l.title} ({l.is_public ? 'Công khai' : 'Nội bộ'})</option>)}
+                      {regularCustomLists.map(l => <option key={l.id} value={l.id}>{l.title} ({l.is_public ? 'Công khai' : 'Nội bộ'})</option>)}
                     </select>
                     <input required placeholder="Họ tên / Tên mục" value={itemForm.name} onChange={e => setItemForm({ ...itemForm, name: e.target.value })} className="border px-3 py-2 rounded-xl text-sm" />
                     <input placeholder="Nhóm / Vai trò" value={itemForm.role_or_group} onChange={e => setItemForm({ ...itemForm, role_or_group: e.target.value })} className="border px-3 py-2 rounded-xl text-sm" />
-                    <input placeholder="Chi tiết / Đóng góp / Ghi chú" value={itemForm.detail} onChange={e => setItemForm({ ...itemForm, detail: e.target.value })} className="border px-3 py-2 rounded-xl text-sm" />
+                    <input placeholder="Chi tiết / SĐT / Ghi chú" value={itemForm.detail} onChange={e => setItemForm({ ...itemForm, detail: e.target.value })} className="border px-3 py-2 rounded-xl text-sm" />
                   </div>
                   <button className="bg-sky-700 text-white px-5 py-2 rounded-xl text-sm font-semibold">Thêm vào danh sách</button>
                 </form>
               )}
 
               <div className="space-y-4">
-                {customLists.map(l => (
+                {regularCustomLists.map(l => (
                   <div key={l.id} className="bg-white p-5 rounded-2xl border">
                     <div className="flex justify-between items-center mb-3">
                       <div>
@@ -1600,14 +2216,22 @@ export default function App() {
     { id: 'announcements', label: 'Thông báo', icon: Bell, iconColor: 'text-red-500', bgColor: 'bg-red-50' },
     { id: 'news', label: 'Tin tức', icon: Newspaper, iconColor: 'text-emerald-600', bgColor: 'bg-emerald-50' },
     { id: 'events', label: 'Lịch thôn', icon: Calendar, iconColor: 'text-sky-600', bgColor: 'bg-sky-50' },
+    { id: 'finance', label: 'Ủng hộ & Thu chi', icon: HeartHandshake, iconColor: 'text-rose-600', bgColor: 'bg-rose-50' },
     { id: 'officials', label: 'Cán bộ', icon: Users, iconColor: 'text-indigo-600', bgColor: 'bg-indigo-50' },
     { id: 'feedback', label: 'Phản ánh', icon: MessageSquare, iconColor: 'text-amber-500', bgColor: 'bg-amber-50' },
     { id: 'suggest', label: 'Góp ý', icon: Lightbulb, iconColor: 'text-emerald-700', bgColor: 'bg-emerald-100/70' },
     { id: 'map', label: 'Bản đồ', icon: MapPin, iconColor: 'text-teal-600', bgColor: 'bg-teal-50' },
     { id: 'contact', label: 'Liên hệ', icon: PhoneCall, iconColor: 'text-blue-600', bgColor: 'bg-blue-50' },
     { id: 'gallery', label: 'Thư viện ảnh', icon: ImageIcon, iconColor: 'text-purple-600', bgColor: 'bg-purple-50' },
-    { id: 'more', label: 'Mã QR', icon: QrCode, iconColor: 'text-slate-700', bgColor: 'bg-slate-100' },
+    { id: 'more', label: 'Mã QR & DS', icon: QrCode, iconColor: 'text-slate-700', bgColor: 'bg-slate-100' },
   ];
+
+  const filteredDonationsPublic = donationItems.filter((d) =>
+    `${d.name} ${d.role_or_group} ${d.detail} ${d.in_kind}`.toLowerCase().includes(searchFinance.toLowerCase())
+  );
+  const filteredLedgerPublic = ledgerItems.filter((l) =>
+    `${l.name} ${l.detail} ${l.note}`.toLowerCase().includes(searchFinance.toLowerCase())
+  );
 
   return (
     <div className="min-h-screen bg-[#f3f6f4] pb-24">
@@ -1747,6 +2371,115 @@ export default function App() {
               </button>
             </div>
           </>
+        )}
+
+        {tab === 'finance' && (
+          <div className="space-y-4">
+            <div>
+              <h2 className="text-xl font-bold text-slate-800">Công khai Ủng hộ & Thu – Chi {appSettings.village_name}</h2>
+              <p className="text-xs text-slate-500 mt-0.5">Ban quản lý thôn cập nhật công khai để toàn thể bà con nhân dân cùng theo dõi, giám sát.</p>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2.5">
+              <div className="bg-white p-3.5 rounded-2xl border border-emerald-100 shadow-sm">
+                <div className="text-[11px] font-bold text-emerald-700">Tổng ủng hộ & Thu</div>
+                <div className="text-sm sm:text-base font-extrabold text-emerald-800 mt-1">{formatVND(totalCombinedThu)}</div>
+              </div>
+              <div className="bg-white p-3.5 rounded-2xl border border-rose-100 shadow-sm">
+                <div className="text-[11px] font-bold text-rose-700">Tổng đã chi</div>
+                <div className="text-sm sm:text-base font-extrabold text-rose-700 mt-1">{formatVND(totalLedgerChi)}</div>
+              </div>
+              <div className="bg-white p-3.5 rounded-2xl border border-sky-100 shadow-sm">
+                <div className="text-[11px] font-bold text-sky-700">Số dư hiện còn</div>
+                <div className="text-sm sm:text-base font-extrabold text-sky-800 mt-1">{formatVND(currentFundBalance)}</div>
+              </div>
+            </div>
+
+            <div className="flex gap-2 bg-white p-1.5 rounded-2xl border border-slate-100 shadow-sm">
+              <button
+                type="button"
+                onClick={() => setFinancePublicSubTab('donations')}
+                className={`flex-1 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition ${financePublicSubTab === 'donations' ? 'bg-emerald-700 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'}`}
+              >
+                Người dân ủng hộ ({donationItems.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setFinancePublicSubTab('ledger')}
+                className={`flex-1 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition ${financePublicSubTab === 'ledger' ? 'bg-emerald-700 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'}`}
+              >
+                Sổ Thu – Chi ({ledgerItems.length})
+              </button>
+            </div>
+
+            <div className="relative">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
+              <input
+                placeholder={financePublicSubTab === 'donations' ? 'Tìm tên người ủng hộ, xóm hoặc đợt vận động...' : 'Tìm nội dung khoản thu, chi...'}
+                value={searchFinance}
+                onChange={e => setSearchFinance(e.target.value)}
+                className="w-full bg-white border border-slate-200 pl-10 pr-4 py-2.5 rounded-xl text-sm"
+              />
+            </div>
+
+            {financePublicSubTab === 'donations' && (
+              <div className="space-y-2.5">
+                {filteredDonationsPublic.length === 0 ? (
+                  <div className="bg-white p-6 rounded-2xl border border-slate-100 text-center text-sm text-slate-500">
+                    Chưa có danh sách ủng hộ nào được đăng tải.
+                  </div>
+                ) : (
+                  filteredDonationsPublic.map((d, idx) => (
+                    <div key={d.id} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm flex justify-between items-start gap-3">
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[11px] font-bold bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full">#{idx + 1}</span>
+                          <span className="font-bold text-slate-800">{d.name}</span>
+                          {d.role_or_group && <span className="text-xs text-slate-500">({d.role_or_group})</span>}
+                        </div>
+                        <div className="text-xs text-slate-600">{d.detail}</div>
+                        {d.note && <div className="text-xs text-slate-500 italic">{d.note}</div>}
+                        <div className="text-[11px] text-slate-400">Ngày ghi nhận: {d.date}</div>
+                      </div>
+                      <div className="text-right shrink-0">
+                        {d.amount > 0 && <div className="font-extrabold text-emerald-700 text-sm sm:text-base">{formatVND(d.amount)}</div>}
+                        {d.in_kind && <div className="text-xs font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-lg mt-1">{d.in_kind}</div>}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+
+            {financePublicSubTab === 'ledger' && (
+              <div className="space-y-2.5">
+                {filteredLedgerPublic.length === 0 ? (
+                  <div className="bg-white p-6 rounded-2xl border border-slate-100 text-center text-sm text-slate-500">
+                    Chưa có khoản thu – chi nào được công khai.
+                  </div>
+                ) : (
+                  filteredLedgerPublic.map((l) => (
+                    <div key={l.id} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm flex justify-between items-start gap-3">
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <span className={`text-[11px] font-extrabold px-2.5 py-0.5 rounded-full ${l.entryType === 'chi' ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-800'}`}>
+                            {l.entryType === 'chi' ? 'CHI' : 'THU'}
+                          </span>
+                          <span className="font-bold text-slate-800 text-sm">{l.name}</span>
+                        </div>
+                        <div className="text-xs text-slate-600">{l.detail}</div>
+                        {l.note && <div className="text-xs text-slate-500 italic">{l.note}</div>}
+                        <div className="text-[11px] text-slate-400">Ngày: {l.date}</div>
+                      </div>
+                      <div className={`font-extrabold text-sm sm:text-base shrink-0 ${l.entryType === 'chi' ? 'text-rose-700' : 'text-emerald-700'}`}>
+                        {l.entryType === 'chi' ? '-' : '+'}{formatVND(l.amount)}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
         )}
 
         {tab === 'announcements' && (
@@ -2106,9 +2839,9 @@ export default function App() {
 
             <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm">
               <h3 className="font-bold text-lg text-slate-800 mb-2">Danh sách công khai của thôn</h3>
-              {customLists.filter(l => l.is_public).length === 0 ? (
+              {regularCustomLists.filter(l => l.is_public).length === 0 ? (
                 <p className="text-sm text-slate-500">Chưa có danh sách công khai nào được đăng tải.</p>
-              ) : customLists.filter(l => l.is_public).map(l => (
+              ) : regularCustomLists.filter(l => l.is_public).map(l => (
                 <div key={l.id} className="border-t pt-3 mt-3 first:border-0 first:pt-0">
                   <div className="font-bold text-emerald-800">{l.title}</div>
                   <ul className="mt-2 space-y-1 text-sm text-slate-600">
@@ -2127,7 +2860,7 @@ export default function App() {
         {[
           { id: 'home', label: 'Trang chủ', icon: Home },
           { id: 'announcements', label: 'Thông báo', icon: Bell },
-          { id: 'officials', label: 'Cán bộ', icon: Users },
+          { id: 'finance', label: 'Ủng hộ', icon: HeartHandshake },
           { id: 'feedback', label: 'Phản ánh', icon: MessageSquare },
           { id: 'suggest', label: 'Góp ý', icon: Lightbulb },
         ].map(n => {
