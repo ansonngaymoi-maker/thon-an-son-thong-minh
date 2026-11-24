@@ -10,7 +10,7 @@ import {
 } from 'lucide-react';
 import { supabase, isConfigured } from './supabaseClient';
 
-const APP_VERSION = 'v1.6.2';
+const APP_VERSION = 'v1.6.3';
 const SEEN_IDS_KEY = 'thon_an_son_seen_post_ids_v1';
 const SETTINGS_STORAGE_KEY = 'thon_an_son_app_settings_v1';
 const DONATION_LIST_MARKER = '__THON_AN_SON_UNG_HO__';
@@ -127,12 +127,22 @@ const syncOneSignalAdminTag = (isAdmin) => {
   });
 };
 
-const getLocalDateTimeInputs = (offsetMinutes = 0) => {
-  const d = new Date(Date.now() + offsetMinutes * 60000);
+// Lấy ngày & giờ hiện tại theo múi giờ Việt Nam (UTC+7)
+const getVietnamDateTimeInputs = (offsetMinutes = 0) => {
+  const vnDate = new Date(Date.now() + offsetMinutes * 60000 + 7 * 3600000);
   const pad = (n) => String(n).padStart(2, '0');
-  const dateStr = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-  const timeStr = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const dateStr = `${vnDate.getUTCFullYear()}-${pad(vnDate.getUTCMonth() + 1)}-${pad(vnDate.getUTCDate())}`;
+  const timeStr = `${pad(vnDate.getUTCHours())}:${pad(vnDate.getUTCMinutes())}`;
   return { dateStr, timeStr };
+};
+
+const parseVietnamScheduledMs = (dateStr, timeStr) => {
+  const cleanDate = String(dateStr || '').trim();
+  if (!cleanDate) return 0;
+  const rawTime = String(timeStr || '07:00').trim();
+  const hhmm = rawTime.length >= 5 ? rawTime.slice(0, 5) : '07:00';
+  const ms = new Date(`${cleanDate}T${hhmm}:00+07:00`).getTime();
+  return Number.isFinite(ms) ? ms : 0;
 };
 
 const parseScheduledItem = (raw) => {
@@ -160,7 +170,7 @@ const parseScheduledItem = (raw) => {
     return {
       hasSchedule: ms > 0,
       publishAtMs: ms,
-      publishLabel: meta?.publishLabel || (ms ? new Date(ms).toLocaleString('vi-VN') : ''),
+      publishLabel: meta?.publishLabel || (ms ? new Date(ms).toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' }) : ''),
       sendPush: Boolean(meta?.sendPush),
       pushedDone: Boolean(meta?.pushedDone),
       isNewsPost,
@@ -181,13 +191,12 @@ const parseScheduledItem = (raw) => {
 
 const packScheduledItem = ({ cleanContent, scheduleDate, scheduleTime, sendPush, isNewsPost }) => {
   const bodyCore = `${isNewsPost ? NEWS_TAG_PREFIX : ''}${String(cleanContent || '').trim()}`;
-  if (!scheduleDate) return bodyCore;
+  const ms = parseVietnamScheduledMs(scheduleDate, scheduleTime);
+  if (!ms) return bodyCore;
   const timeClean = (scheduleTime || '07:00').trim();
-  const ms = new Date(`${scheduleDate}T${timeClean}:00`).getTime();
-  if (!Number.isFinite(ms)) return bodyCore;
   const metaObj = {
     publishAtMs: ms,
-    publishLabel: `${scheduleDate} ${timeClean}`,
+    publishLabel: `${scheduleDate} ${timeClean} (GMT+7)`,
     sendPush: Boolean(sendPush),
     pushedDone: ms <= Date.now() + 15000,
   };
@@ -283,7 +292,7 @@ export default function App() {
     amount: '',
     in_kind: '',
     campaign: 'Vận động xây dựng & hoạt động thôn',
-    date: new Date().toISOString().slice(0, 10),
+    date: getVietnamDateTimeInputs(0).dateStr,
     note: '',
   });
   const [editingLedgerId, setEditingLedgerId] = useState(null);
@@ -292,7 +301,7 @@ export default function App() {
     type: 'thu',
     title: '',
     amount: '',
-    date: new Date().toISOString().slice(0, 10),
+    date: getVietnamDateTimeInputs(0).dateStr,
     campaign: 'Quỹ vận động thôn An Sơn',
     note: '',
   });
@@ -316,7 +325,7 @@ export default function App() {
   const hasInitializedFeedRef = useRef(false);
 
   // Schedule toggles (mặc định KHÔNG tích = đăng ngay, bật tích mới hiện ngày giờ hẹn)
-  const defaultLater = getLocalDateTimeInputs(15);
+  const defaultLater = getVietnamDateTimeInputs(5);
   const [annImageFile, setAnnImageFile] = useState(null);
   const [annImagePreview, setAnnImagePreview] = useState('');
   const [uploadingAnn, setUploadingAnn] = useState(false);
@@ -844,7 +853,7 @@ export default function App() {
         amount: '',
         in_kind: '',
         campaign: 'Vận động xây dựng & hoạt động thôn',
-        date: new Date().toISOString().slice(0, 10),
+        date: getVietnamDateTimeInputs(0).dateStr,
         note: '',
       });
       await fetchPublicData();
@@ -865,7 +874,7 @@ export default function App() {
       amount: meta.amount ? String(meta.amount) : '',
       in_kind: meta.in_kind || '',
       campaign: item.detail || 'Vận động xây dựng & hoạt động thôn',
-      date: meta.date || new Date().toISOString().slice(0, 10),
+      date: meta.date || getVietnamDateTimeInputs(0).dateStr,
       note: meta.note || '',
     });
   };
@@ -931,7 +940,7 @@ export default function App() {
         type: 'thu',
         title: '',
         amount: '',
-        date: new Date().toISOString().slice(0, 10),
+        date: getVietnamDateTimeInputs(0).dateStr,
         campaign: 'Quỹ vận động thôn An Sơn',
         note: '',
       });
@@ -956,7 +965,7 @@ export default function App() {
       type: meta.type === 'chi' ? 'chi' : 'thu',
       title: item.name || '',
       amount: meta.amount ? String(meta.amount) : '',
-      date: meta.date || new Date().toISOString().slice(0, 10),
+      date: meta.date || getVietnamDateTimeInputs(0).dateStr,
       campaign: item.detail || 'Quỹ vận động thôn An Sơn',
       note: meta.note || '',
     });
@@ -1187,9 +1196,7 @@ export default function App() {
         image_url = urlData.publicUrl;
       }
 
-      const scheduledMs = useAnnSchedule && annScheduleDate
-        ? new Date(`${annScheduleDate}T${(annScheduleTime || '00:00').trim()}:00`).getTime()
-        : 0;
+      const scheduledMs = useAnnSchedule ? parseVietnamScheduledMs(annScheduleDate, annScheduleTime) : 0;
       const isFutureScheduled = Boolean(useAnnSchedule && scheduledMs > Date.now() + 15000);
 
       const packedContent = useAnnSchedule
@@ -1210,7 +1217,7 @@ export default function App() {
       if (!error) {
         const created = insertedRows?.[0];
         let msg = isFutureScheduled
-          ? `Đã hẹn giờ đăng thông báo vào ${annScheduleDate} lúc ${annScheduleTime}! Tới giờ máy chủ sẽ tự đăng và báo chuông.`
+          ? `Đã hẹn giờ đăng thông báo vào ${annScheduleDate} lúc ${annScheduleTime} (GMT+7)! Tới giờ máy chủ sẽ tự đăng và báo chuông.`
           : 'Đã đăng thông báo mới!';
 
         if (!isFutureScheduled && sendPushOnAnn) {
@@ -1224,7 +1231,7 @@ export default function App() {
           msg = formatPushResultMessage('Đã đăng thông báo!', pushRes);
         }
 
-        const nextLater = getLocalDateTimeInputs(15);
+        const nextLater = getVietnamDateTimeInputs(5);
         setAnnForm({ title: '', content: '', priority: 'normal', is_pinned: false });
         setUseAnnSchedule(false);
         setAnnScheduleDate(nextLater.dateStr);
@@ -1242,9 +1249,7 @@ export default function App() {
 
   const handleNewsSubmit = async (e) => {
     e.preventDefault();
-    const scheduledMs = useNewsSchedule && newsScheduleDate
-      ? new Date(`${newsScheduleDate}T${(newsScheduleTime || '00:00').trim()}:00`).getTime()
-      : 0;
+    const scheduledMs = useNewsSchedule ? parseVietnamScheduledMs(newsScheduleDate, newsScheduleTime) : 0;
     const isFutureScheduled = Boolean(useNewsSchedule && scheduledMs > Date.now() + 15000);
 
     if (isFutureScheduled) {
@@ -1264,13 +1269,13 @@ export default function App() {
         },
       ]);
       if (!error) {
-        const nextLater = getLocalDateTimeInputs(15);
+        const nextLater = getVietnamDateTimeInputs(5);
         setNewsForm({ title: '', content: '', category: 'Hoạt động cộng đồng', video_url: '' });
         setUseNewsSchedule(false);
         setNewsScheduleDate(nextLater.dateStr);
         setNewsScheduleTime(nextLater.timeStr);
         fetchPublicData();
-        showToast(`Đã hẹn giờ đăng tin tức lúc ${newsScheduleDate} ${newsScheduleTime}! Tới giờ máy chủ sẽ tự đăng và đẩy chuông báo.`, 6000);
+        showToast(`Đã hẹn giờ đăng tin tức lúc ${newsScheduleDate} ${newsScheduleTime} (GMT+7)! Tới giờ máy chủ sẽ tự đăng và đẩy chuông báo.`, 6000);
       } else {
         showToast('Lỗi: ' + error.message);
       }
@@ -1368,7 +1373,7 @@ export default function App() {
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
-    link.download = `sao-luu-thon-an-son-${new Date().toISOString().slice(0, 10)}.json`;
+    link.download = `sao-luu-thon-an-son-${getVietnamDateTimeInputs(0).dateStr}.json`;
     link.click();
     showToast('Đã tải tệp sao lưu dữ liệu thành công!');
   };
@@ -1388,7 +1393,7 @@ export default function App() {
   }
 
   const nowMs = Date.now();
-  const todayIso = getLocalDateTimeInputs(0).dateStr;
+  const todayIso = getVietnamDateTimeInputs(0).dateStr;
 
   const formattedAnnouncements = announcements.map((a) => {
     const parsed = parseScheduledItem(a.content);
@@ -1470,7 +1475,7 @@ export default function App() {
   const totalCombinedThu = totalDonatedMoney + totalLedgerThu;
   const currentFundBalance = totalCombinedThu - totalLedgerChi;
 
-  const todayStr = new Date().toLocaleDateString('vi-VN', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' });
+  const todayStr = new Date().toLocaleDateString('vi-VN', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'Asia/Ho_Chi_Minh' });
   const galleryItems = publishedAnnouncements.filter(a => a.image_url);
   const culturalHouseMapSrc = buildCulturalHouseMapUrl(appSettings);
   const culturalHouseExternalUrl = buildCulturalHouseExternalUrl(appSettings);
@@ -1634,7 +1639,7 @@ export default function App() {
               <div className="bg-white p-6 rounded-2xl border shadow-sm space-y-2">
                 <h3 className="font-bold text-slate-800">Trạng thái bảo mật & Thông báo đẩy ({APP_VERSION})</h3>
                 <p className="text-sm text-emerald-700 flex items-center gap-2"><CheckCircle className="w-4 h-4 shrink-0" /> Đã kết nối cơ sở dữ liệu Supabase thời gian thực.</p>
-                <p className="text-sm text-emerald-700 flex items-center gap-2"><CheckCircle className="w-4 h-4 shrink-0" /> Tích chọn hẹn ngày giờ đăng tự động xuất bản & gửi chuông qua máy chủ dù tắt màn hình.</p>
+                <p className="text-sm text-emerald-700 flex items-center gap-2"><CheckCircle className="w-4 h-4 shrink-0" /> Chuẩn giờ Việt Nam (GMT+7), tới giờ hẹn tự động xuất bản & đẩy chuông dù tắt màn hình.</p>
               </div>
             </div>
           )}
@@ -1687,11 +1692,11 @@ export default function App() {
                 {useAnnSchedule && (
                   <div className="bg-amber-50/80 p-3.5 rounded-xl border border-amber-200 grid sm:grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-[11px] font-bold text-amber-900 mb-1">Ngày hẹn đăng</label>
+                      <label className="block text-[11px] font-bold text-amber-900 mb-1">Ngày hẹn đăng (Giờ VN)</label>
                       <input required type="date" value={annScheduleDate} onChange={e => setAnnScheduleDate(e.target.value)} className="w-full border bg-white px-3 py-2 rounded-xl text-sm" />
                     </div>
                     <div>
-                      <label className="block text-[11px] font-bold text-amber-900 mb-1">Giờ hẹn đăng</label>
+                      <label className="block text-[11px] font-bold text-amber-900 mb-1">Giờ hẹn đăng (Giờ VN)</label>
                       <input required type="time" value={annScheduleTime} onChange={e => setAnnScheduleTime(e.target.value)} className="w-full border bg-white px-3 py-2 rounded-xl text-sm" />
                     </div>
                   </div>
@@ -1772,11 +1777,11 @@ export default function App() {
                 {useNewsSchedule && (
                   <div className="bg-amber-50/80 p-3.5 rounded-xl border border-amber-200 grid sm:grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-[11px] font-bold text-amber-900 mb-1">Ngày hẹn đăng</label>
+                      <label className="block text-[11px] font-bold text-amber-900 mb-1">Ngày hẹn đăng (Giờ VN)</label>
                       <input required type="date" value={newsScheduleDate} onChange={e => setNewsScheduleDate(e.target.value)} className="w-full border bg-white px-3 py-2 rounded-xl text-sm" />
                     </div>
                     <div>
-                      <label className="block text-[11px] font-bold text-amber-900 mb-1">Giờ hẹn đăng</label>
+                      <label className="block text-[11px] font-bold text-amber-900 mb-1">Giờ hẹn đăng (Giờ VN)</label>
                       <input required type="time" value={newsScheduleTime} onChange={e => setNewsScheduleTime(e.target.value)} className="w-full border bg-white px-3 py-2 rounded-xl text-sm" />
                     </div>
                   </div>
@@ -1816,11 +1821,9 @@ export default function App() {
               <h1 className="text-2xl font-bold">Quản lý Lịch sinh hoạt cộng đồng</h1>
               <form onSubmit={async (e) => {
                 e.preventDefault();
-                const pubMs = useEvtSchedule && evtPublishDate
-                  ? new Date(`${evtPublishDate}T${(evtPublishTime || '00:00').trim()}:00`).getTime()
-                  : 0;
+                const pubMs = useEvtSchedule ? parseVietnamScheduledMs(evtPublishDate, evtPublishTime) : 0;
                 const packedDesc = useEvtSchedule && pubMs
-                  ? `${SCHEDULE_META_PREFIX}${JSON.stringify({ publishAtMs: pubMs, publishLabel: `${evtPublishDate} ${evtPublishTime}`, sendPush: sendPushOnEvent, pushedDone: pubMs <= Date.now() + 15000 })}\n${evtForm.description || ''}`
+                  ? `${SCHEDULE_META_PREFIX}${JSON.stringify({ publishAtMs: pubMs, publishLabel: `${evtPublishDate} ${evtPublishTime} (GMT+7)`, sendPush: sendPushOnEvent, pushedDone: pubMs <= Date.now() + 15000 })}\n${evtForm.description || ''}`
                   : (evtForm.description || '');
                 const payload = {
                   title: evtForm.title,
@@ -1835,7 +1838,7 @@ export default function App() {
                   const created = insertedRows?.[0];
                   const isFutureSch = Boolean(useEvtSchedule && pubMs > Date.now() + 15000);
                   let msg = isFutureSch
-                    ? `Đã hẹn giờ đăng lịch lúc ${evtPublishDate} ${evtPublishTime}!`
+                    ? `Đã hẹn giờ đăng lịch lúc ${evtPublishDate} ${evtPublishTime} (GMT+7)!`
                     : 'Đã thêm lịch sinh hoạt!';
                   if (!isFutureSch && sendPushOnEvent) {
                     const pushRes = await dispatchOneSignalPush({
@@ -1846,7 +1849,7 @@ export default function App() {
                     });
                     msg = formatPushResultMessage('Đã thêm lịch sinh hoạt!', pushRes);
                   }
-                  const nextLater = getLocalDateTimeInputs(15);
+                  const nextLater = getVietnamDateTimeInputs(5);
                   setEvtForm({ title: '', event_date: '', event_time: '19:30', location: appSettings.cultural_house_name, category: 'Họp dân', description: '' });
                   setUseEvtSchedule(false);
                   setEvtPublishDate(nextLater.dateStr);
@@ -1886,11 +1889,11 @@ export default function App() {
                 {useEvtSchedule && (
                   <div className="bg-amber-50/80 p-3 rounded-xl border border-amber-200 grid sm:grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-[11px] font-bold text-amber-900 mb-1">Ngày hẹn đăng tin lịch</label>
+                      <label className="block text-[11px] font-bold text-amber-900 mb-1">Ngày hẹn đăng tin lịch (Giờ VN)</label>
                       <input required type="date" value={evtPublishDate} onChange={e => setEvtPublishDate(e.target.value)} className="w-full border bg-white px-3 py-1.5 rounded-xl text-xs" />
                     </div>
                     <div>
-                      <label className="block text-[11px] font-bold text-amber-900 mb-1">Giờ hẹn đăng tin lịch</label>
+                      <label className="block text-[11px] font-bold text-amber-900 mb-1">Giờ hẹn đăng tin lịch (Giờ VN)</label>
                       <input required type="time" value={evtPublishTime} onChange={e => setEvtPublishTime(e.target.value)} className="w-full border bg-white px-3 py-1.5 rounded-xl text-xs" />
                     </div>
                   </div>
@@ -2001,7 +2004,7 @@ export default function App() {
                           amount: '',
                           in_kind: '',
                           campaign: 'Vận động xây dựng & hoạt động thôn',
-                          date: new Date().toISOString().slice(0, 10),
+                          date: getVietnamDateTimeInputs(0).dateStr,
                           note: '',
                         });
                       }}
@@ -2152,7 +2155,7 @@ export default function App() {
                           type: 'thu',
                           title: '',
                           amount: '',
-                          date: new Date().toISOString().slice(0, 10),
+                          date: getVietnamDateTimeInputs(0).dateStr,
                           campaign: 'Quỹ vận động thôn An Sơn',
                           note: '',
                         });
@@ -2695,7 +2698,7 @@ export default function App() {
                 <div className="flex items-center justify-between">
                   <div>
                     <div className="font-bold text-lg">Phiên bản hiện tại: {APP_VERSION}</div>
-                    <p className="text-sm text-slate-500">Hỗ trợ chọn tích hẹn ngày giờ đăng cho Thông báo, Tin tức & Lịch thôn; máy chủ tự đẩy chuông dù tắt màn hình.</p>
+                    <p className="text-sm text-slate-500">Hỗ trợ chọn tích hẹn ngày giờ đăng (GMT+7) cho Thông báo, Tin tức & Lịch thôn; máy chủ tự đẩy chuông dù tắt màn hình.</p>
                   </div>
                   <button onClick={() => window.location.reload()} className="bg-slate-100 hover:bg-slate-200 px-4 py-2 rounded-xl text-sm font-medium flex items-center gap-2"><RefreshCw className="w-4 h-4" /> Kiểm tra cập nhật</button>
                 </div>
@@ -3028,7 +3031,7 @@ export default function App() {
                             {a.is_pinned && <span className="text-[11px] bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full font-bold">📌 Ghim</span>}
                             {a.priority === 'urgent' && <span className="text-[11px] bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-bold">Khẩn cấp</span>}
                             <span className="text-xs font-bold text-emerald-700">Thông báo thôn</span>
-                            <span className="text-[11px] text-slate-400 ml-auto">{new Date(a.created_at).toLocaleDateString('vi-VN')}</span>
+                            <span className="text-[11px] text-slate-400 ml-auto">{new Date(a.created_at).toLocaleDateString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })}</span>
                           </div>
                           <h3
                             onClick={() => openPostFromKey(`announcements-${a.id}`)}
@@ -3066,7 +3069,7 @@ export default function App() {
                         <div key={n.id} className="bg-white p-4 rounded-2xl border-l-4 border-l-teal-500 border border-slate-100 shadow-sm space-y-2">
                           <div className="flex items-center gap-2">
                             <span className="text-[11px] bg-teal-50 text-teal-800 px-2.5 py-0.5 rounded-full font-bold">{n.category}</span>
-                            <span className="text-[11px] text-slate-400 ml-auto">{new Date(n.created_at).toLocaleDateString('vi-VN')}</span>
+                            <span className="text-[11px] text-slate-400 ml-auto">{new Date(n.created_at).toLocaleDateString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })}</span>
                           </div>
                           <h3
                             onClick={() => navigatePublic('feed', 'news')}
@@ -3128,7 +3131,7 @@ export default function App() {
                         >
                           <div className="flex items-center gap-2 text-xs text-slate-400">
                             <span className="font-bold text-emerald-700">Thông báo</span>
-                            <span>• {a.is_pinned ? '📌 Đã ghim • ' : ''}{new Date(a.created_at).toLocaleDateString('vi-VN')}</span>
+                            <span>• {a.is_pinned ? '📌 Đã ghim • ' : ''}{new Date(a.created_at).toLocaleDateString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })}</span>
                           </div>
                           <h3 className="font-bold text-lg text-slate-800">{a.title}</h3>
                           <p className="text-slate-600 whitespace-pre-line text-sm">{a.cleanContent}</p>
@@ -3223,7 +3226,7 @@ export default function App() {
                             <img src={item.image_url} alt={item.title} className="w-full h-52 object-cover group-hover:scale-[1.02] transition" />
                             <div className="p-3">
                               <div className="font-bold text-sm text-slate-800 line-clamp-1">{item.title}</div>
-                              <div className="text-[11px] text-slate-400 mt-0.5">{new Date(item.created_at).toLocaleDateString('vi-VN')}</div>
+                              <div className="text-[11px] text-slate-400 mt-0.5">{new Date(item.created_at).toLocaleDateString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })}</div>
                             </div>
                           </a>
                         ))}
