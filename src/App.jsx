@@ -8,13 +8,11 @@ import {
 } from 'lucide-react';
 import { supabase, isConfigured } from './supabaseClient';
 
-const APP_VERSION = 'v1.5.1';
+const APP_VERSION = 'v1.5.3';
 const SEEN_IDS_KEY = 'thon_an_son_seen_post_ids_v1';
 const ONESIGNAL_APP_ID =
   (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_ONESIGNAL_APP_ID) ||
   'e21ec54f-f220-4014-a603-d9c0f23977ab';
-const ONESIGNAL_REST_KEY =
-  (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_ONESIGNAL_REST_KEY) || '';
 
 const QRImage = ({ url, size = 200 }) => {
   const src = `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encodeURIComponent(url)}`;
@@ -93,53 +91,48 @@ export default function App() {
     setTimeout(() => setToast(''), duration);
   };
 
-  // Gửi thông báo đẩy qua OneSignal API tới toàn bộ điện thoại bà con
+  // Gửi thông báo đẩy qua máy chủ Vercel (/api/send-push)
   const dispatchOneSignalPush = async ({ heading, content, launchUrl, imageUrl }) => {
-    const cleanKey = (ONESIGNAL_REST_KEY || '').trim();
-    if (!ONESIGNAL_APP_ID || !cleanKey) {
-      return { ok: false, reason: 'missing_key' };
-    }
-
-    const authHeader = cleanKey.startsWith('os_v2_') ? `Key ${cleanKey}` : `Basic ${cleanKey}`;
-    const bodyPayload = {
-      app_id: ONESIGNAL_APP_ID.trim(),
-      included_segments: ['Total Subscriptions'],
-      headings: { en: heading, vi: heading },
-      contents: { en: content, vi: content },
-      url: launchUrl || siteUrl,
-    };
-    if (imageUrl) {
-      bodyPayload.chrome_web_image = imageUrl;
-    }
-
+    const endpoint = `${siteUrl}/api/send-push`;
     try {
-      const res = await fetch('https://api.onesignal.com/notifications?c=push', {
+      const res = await fetch(endpoint, {
         method: 'POST',
+        cache: 'no-store',
         headers: {
           'Content-Type': 'application/json; charset=utf-8',
-          Authorization: authHeader,
         },
-        body: JSON.stringify(bodyPayload),
+        body: JSON.stringify({
+          heading,
+          content,
+          launchUrl: launchUrl || siteUrl,
+          imageUrl: imageUrl || undefined,
+        }),
       });
-      const data = await res.json();
-      if (res.ok && !data.errors) {
-        return { ok: true, recipients: data.recipients ?? 1 };
+      const text = await res.text();
+      let data = {};
+      try {
+        data = text ? JSON.parse(text) : {};
+      } catch (_parseErr) {
+        return { ok: false, reason: `Phản hồi không hợp lệ (HTTP ${res.status})` };
       }
-      const errDetail = Array.isArray(data.errors) ? data.errors.join(', ') : JSON.stringify(data.errors || data);
-      return { ok: false, reason: errDetail };
+      if (res.ok && data.ok) {
+        return { ok: true, recipients: data.recipients ?? 0 };
+      }
+      return { ok: false, reason: data.error || `HTTP ${res.status}` };
     } catch (err) {
-      return { ok: false, reason: err.message || 'Lỗi kết nối mạng' };
+      return { ok: false, reason: `${err?.message || 'Lỗi kết nối'} (${endpoint})` };
     }
   };
 
-  // Hủy Service Worker sw.js cũ nếu còn lưu trong cache trình duyệt & nạp OneSignal SDK
+  // Hủy Service Worker cũ không phải OneSignal & nạp OneSignal SDK
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.getRegistrations().then((regs) => {
         regs.forEach((reg) => {
-          if (reg.active && reg.active.scriptURL && reg.active.scriptURL.endsWith('/sw.js')) {
+          const scriptUrl = reg?.active?.scriptURL || reg?.installing?.scriptURL || reg?.waiting?.scriptURL || '';
+          if (scriptUrl && !scriptUrl.includes('OneSignalSDKWorker')) {
             reg.unregister();
           }
         });
@@ -482,10 +475,7 @@ export default function App() {
     if (pushRes.ok) {
       return `${baseSuccessMsg} Đã gửi chuông báo tới điện thoại bà con!`;
     }
-    if (pushRes.reason === 'missing_key') {
-      return `${baseSuccessMsg} (Chưa nhận biến VITE_ONESIGNAL_REST_KEY trên Vercel - hãy bấm Redeploy).`;
-    }
-    return `${baseSuccessMsg} (Lỗi đẩy chuông OneSignal: ${pushRes.reason})`;
+    return `${baseSuccessMsg} (Lỗi gửi push: ${pushRes.reason})`;
   };
 
   const handleAnnouncementSubmit = async (e) => {
@@ -766,12 +756,7 @@ export default function App() {
               <div className="bg-white p-6 rounded-2xl border shadow-sm space-y-2">
                 <h3 className="font-bold text-slate-800">Trạng thái bảo mật & Thông báo đẩy ({APP_VERSION})</h3>
                 <p className="text-sm text-emerald-700 flex items-center gap-2"><CheckCircle className="w-4 h-4 shrink-0" /> Đã kết nối cơ sở dữ liệu Supabase thời gian thực.</p>
-                <p className={`text-sm flex items-center gap-2 ${ONESIGNAL_REST_KEY ? 'text-emerald-700' : 'text-amber-600'}`}>
-                  {ONESIGNAL_REST_KEY ? <CheckCircle className="w-4 h-4 shrink-0" /> : <AlertTriangle className="w-4 h-4 shrink-0" />}
-                  {ONESIGNAL_REST_KEY
-                    ? 'Đã nhận mã khóa OneSignal REST API Key – Sẵn sàng tự động đẩy chuông khi đăng bài.'
-                    : 'Chưa nhận biến VITE_ONESIGNAL_REST_KEY trên Vercel (cần thêm vào dự án và bấm Redeploy).'}
-                </p>
+                <p className="text-sm text-emerald-700 flex items-center gap-2"><CheckCircle className="w-4 h-4 shrink-0" /> Đã kích hoạt cổng gửi thông báo đẩy máy chủ /api/send-push.</p>
               </div>
             </div>
           )}
