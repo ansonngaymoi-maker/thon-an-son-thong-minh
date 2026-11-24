@@ -4,19 +4,73 @@ import {
   Shield, Phone, MapPin, Plus, Trash2, LogOut, Search,
   CheckCircle, AlertTriangle, Download, Printer, ListPlus,
   Home as HomeIcon, Lock, RefreshCw, ChevronRight, X,
-  Image as ImageIcon, Map, PhoneCall, ExternalLink, Copy, Check, ArrowDown
+  Image as ImageIcon, Map, PhoneCall, ExternalLink, Copy, Check, ArrowDown,
+  Settings, FileSpreadsheet, Upload
 } from 'lucide-react';
 import { supabase, isConfigured } from './supabaseClient';
 
-const APP_VERSION = 'v1.5.3';
+const APP_VERSION = 'v1.5.4';
 const SEEN_IDS_KEY = 'thon_an_son_seen_post_ids_v1';
+const SETTINGS_STORAGE_KEY = 'thon_an_son_app_settings_v1';
 const ONESIGNAL_APP_ID =
   (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_ONESIGNAL_APP_ID) ||
   'e21ec54f-f220-4014-a603-d9c0f23977ab';
 
+const DEFAULT_SETTINGS = {
+  village_name: 'THÔN AN SƠN',
+  subtitle: 'Xã Cam Lộ – Tỉnh Quảng Trị',
+  address: 'Thôn An Sơn, xã Cam Lộ, tỉnh Quảng Trị',
+  cultural_house_name: 'Nhà văn hóa thôn An Sơn',
+  cultural_house_query: 'Nhà văn hóa thôn An Sơn, Cam Lộ, Quảng Trị',
+  cultural_house_lat: '',
+  cultural_house_lng: '',
+  cultural_house_note: 'Điểm sinh hoạt cộng đồng, hội họp và đón tiếp bà con thôn An Sơn.',
+  public_notice: 'Thông tin cộng đồng – Kết nối người dân – Chung tay xây dựng quê hương',
+};
+
 const QRImage = ({ url, size = 200 }) => {
   const src = `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encodeURIComponent(url)}`;
   return <img src={src} alt="Mã QR Thôn An Sơn" width={size} height={size} className="rounded-xl border border-slate-200 bg-white p-2 mx-auto" />;
+};
+
+const loadXlsxLibrary = () => {
+  if (typeof window === 'undefined') return Promise.resolve(null);
+  if (window.XLSX) return Promise.resolve(window.XLSX);
+  return new Promise((resolve, reject) => {
+    const existing = document.getElementById('xlsx-cdn-script');
+    if (existing) {
+      existing.addEventListener('load', () => resolve(window.XLSX));
+      existing.addEventListener('error', () => reject(new Error('Không tải được thư viện đọc file Excel')));
+      return;
+    }
+    const script = document.createElement('script');
+    script.id = 'xlsx-cdn-script';
+    script.src = 'https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js';
+    script.async = true;
+    script.onload = () => resolve(window.XLSX);
+    script.onerror = () => reject(new Error('Không tải được thư viện đọc file Excel'));
+    document.head.appendChild(script);
+  });
+};
+
+const buildCulturalHouseMapUrl = (settings) => {
+  const lat = String(settings?.cultural_house_lat || '').trim();
+  const lng = String(settings?.cultural_house_lng || '').trim();
+  if (lat && lng) {
+    return `https://maps.google.com/maps?q=${encodeURIComponent(`${lat},${lng}`)}&t=&z=16&ie=UTF8&iwloc=&output=embed`;
+  }
+  const query = String(settings?.cultural_house_query || settings?.cultural_house_name || 'Nhà văn hóa thôn An Sơn, Cam Lộ, Quảng Trị').trim();
+  return `https://maps.google.com/maps?q=${encodeURIComponent(query)}&t=&z=15&ie=UTF8&iwloc=&output=embed`;
+};
+
+const buildCulturalHouseExternalUrl = (settings) => {
+  const lat = String(settings?.cultural_house_lat || '').trim();
+  const lng = String(settings?.cultural_house_lng || '').trim();
+  if (lat && lng) {
+    return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${lat},${lng}`)}`;
+  }
+  const query = String(settings?.cultural_house_query || settings?.cultural_house_name || 'Nhà văn hóa thôn An Sơn Cam Lộ Quảng Trị').trim();
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
 };
 
 export default function App() {
@@ -32,6 +86,19 @@ export default function App() {
   const [authError, setAuthError] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
 
+  // Settings
+  const [appSettings, setAppSettings] = useState(() => {
+    if (typeof window === 'undefined') return DEFAULT_SETTINGS;
+    try {
+      const saved = localStorage.getItem(SETTINGS_STORAGE_KEY);
+      return saved ? { ...DEFAULT_SETTINGS, ...JSON.parse(saved) } : DEFAULT_SETTINGS;
+    } catch (_e) {
+      return DEFAULT_SETTINGS;
+    }
+  });
+  const [settingsForm, setSettingsForm] = useState(appSettings);
+  const [savingSettings, setSavingSettings] = useState(false);
+
   // Public data
   const [announcements, setAnnouncements] = useState([]);
   const [news, setNews] = useState([]);
@@ -45,6 +112,11 @@ export default function App() {
   const [feedbacks, setFeedbacks] = useState([]);
   const [households, setHouseholds] = useState([]);
   const [residents, setResidents] = useState([]);
+
+  // Excel import states
+  const [excelFileName, setExcelFileName] = useState('');
+  const [excelPreviewRows, setExcelPreviewRows] = useState([]);
+  const [importingExcel, setImportingExcel] = useState(false);
 
   // UI states
   const [searchOfficial, setSearchOfficial] = useState('');
@@ -91,7 +163,6 @@ export default function App() {
     setTimeout(() => setToast(''), duration);
   };
 
-  // Gửi thông báo đẩy qua máy chủ Vercel (/api/send-push)
   const dispatchOneSignalPush = async ({ heading, content, launchUrl, imageUrl }) => {
     const endpoint = `${siteUrl}/api/send-push`;
     try {
@@ -124,7 +195,6 @@ export default function App() {
     }
   };
 
-  // Hủy Service Worker cũ không phải OneSignal & nạp OneSignal SDK
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
@@ -171,7 +241,6 @@ export default function App() {
     }
   }, []);
 
-  // Kéo màn hình từ trên xuống để tải tin mới nhất (Pull-to-Refresh trên iPhone & Android)
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
@@ -394,13 +463,14 @@ export default function App() {
   const fetchPublicData = async () => {
     setLoading(true);
     try {
-      const [a, n, o, e, cl, ci] = await Promise.all([
+      const [a, n, o, e, cl, ci, s] = await Promise.all([
         supabase.from('announcements').select('*').order('is_pinned', { ascending: false }).order('created_at', { ascending: false }),
         supabase.from('news').select('*').order('created_at', { ascending: false }),
         supabase.from('officials').select('*').order('sort_order', { ascending: true }),
         supabase.from('events').select('*').order('event_date', { ascending: true }),
         supabase.from('custom_lists').select('*').order('created_at', { ascending: false }),
         supabase.from('custom_list_items').select('*').order('created_at', { ascending: true }),
+        supabase.from('app_settings').select('*').limit(1),
       ]);
       const annRows = a.data || [];
       const newsRows = n.data || [];
@@ -410,6 +480,14 @@ export default function App() {
       if (e.data) setEvents(e.data);
       if (cl.data) setCustomLists(cl.data);
       if (ci.data) setCustomItems(ci.data);
+      if (s && !s.error && Array.isArray(s.data) && s.data[0]) {
+        const merged = { ...DEFAULT_SETTINGS, ...s.data[0] };
+        setAppSettings(merged);
+        setSettingsForm(merged);
+        if (typeof window !== 'undefined') {
+          localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(merged));
+        }
+      }
       checkNewPostsSinceLastVisit(annRows, newsRows);
     } finally {
       setLoading(false);
@@ -425,6 +503,103 @@ export default function App() {
     if (fb.data) setFeedbacks(fb.data);
     if (hh.data) setHouseholds(hh.data);
     if (res.data) setResidents(res.data);
+  };
+
+  const handleSaveSettings = async (e) => {
+    e.preventDefault();
+    setSavingSettings(true);
+    try {
+      const normalized = {
+        ...DEFAULT_SETTINGS,
+        ...settingsForm,
+        cultural_house_lat: String(settingsForm.cultural_house_lat || '').trim(),
+        cultural_house_lng: String(settingsForm.cultural_house_lng || '').trim(),
+      };
+      setAppSettings(normalized);
+      if (typeof window !== 'undefined') {
+        localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(normalized));
+      }
+      const { error } = await supabase.from('app_settings').upsert([{ id: 1, ...normalized }], { onConflict: 'id' });
+      if (error) {
+        showToast('Đã lưu cài đặt trên thiết bị này (bảng app_settings chưa tạo trên Supabase: ' + error.message + ')', 6000);
+      } else {
+        showToast('Đã lưu cài đặt và ghim vị trí Nhà văn hóa thôn An Sơn thành công!');
+      }
+    } finally {
+      setSavingSettings(false);
+    }
+  };
+
+  const normalizeHouseholdRow = (rawRow, index) => {
+    const entries = Object.entries(rawRow || {});
+    const pickValue = (keys) => {
+      for (const k of keys) {
+        const found = entries.find(([colName]) => colName.toLowerCase().trim() === k.toLowerCase());
+        if (found && found[1] !== undefined && found[1] !== null && String(found[1]).trim() !== '') {
+          return String(found[1]).trim();
+        }
+      }
+      return '';
+    };
+
+    const household_code =
+      pickValue(['household_code', 'ma_ho', 'mã hộ', 'mahộ', 'ma ho', 'mã']) ||
+      `AS-${String(households.length + index + 1).padStart(3, '0')}`;
+    const head_name = pickValue(['head_name', 'chu_ho', 'chủ hộ', 'chuho', 'chu ho', 'họ tên chủ hộ', 'ho ten chu ho', 'ten chu ho']);
+    const area = pickValue(['area', 'khu_vuc', 'khu vực', 'khuvuc', 'xom', 'xóm', 'tổ', 'to']);
+    const phone = pickValue(['phone', 'sdt', 'sđt', 'so_dien_thoai', 'số điện thoại', 'dien thoai', 'điện thoại']);
+    const rawCount = pickValue(['member_count', 'so_nguoi', 'số người', 'songuoi', 'nhan_khau', 'nhân khẩu', 'so_nhan_khau', 'số nhân khẩu']);
+    const parsedCount = parseInt(rawCount.replace(/[^\d]/g, ''), 10);
+    const member_count = Number.isFinite(parsedCount) && parsedCount > 0 ? parsedCount : 1;
+    const notes = pickValue(['notes', 'ghi_chu', 'ghi chú', 'ghichu', 'ghi chu']);
+
+    if (!head_name) return null;
+    return { household_code, head_name, area, phone, member_count, notes };
+  };
+
+  const handleExcelFileChange = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setExcelFileName(file.name);
+    try {
+      const XLSX = await loadXlsxLibrary();
+      const buffer = await file.arrayBuffer();
+      const workbook = XLSX.read(buffer, { type: 'array' });
+      const firstSheetName = workbook.SheetNames[0];
+      const worksheet = workbook.Sheets[firstSheetName];
+      const jsonRows = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
+      const mapped = jsonRows
+        .map((row, idx) => normalizeHouseholdRow(row, idx))
+        .filter(Boolean);
+      setExcelPreviewRows(mapped);
+      if (mapped.length === 0) {
+        showToast('Không đọc được dòng hộ dân hợp lệ. Kiểm tra cột Chủ hộ / Mã hộ trong file Excel.');
+      } else {
+        showToast(`Đã đọc ${mapped.length} hộ dân từ tệp "${file.name}". Bấm "Đẩy lên hệ thống" để lưu.`);
+      }
+    } catch (err) {
+      setExcelPreviewRows([]);
+      showToast('Lỗi đọc tệp Excel: ' + (err?.message || 'Vui lòng kiểm tra lại định dạng tệp.'));
+    }
+  };
+
+  const handlePushExcelToSupabase = async () => {
+    if (!excelPreviewRows.length || importingExcel) return;
+    setImportingExcel(true);
+    try {
+      const { error } = await supabase.from('households').insert(excelPreviewRows);
+      if (error) {
+        showToast('Lỗi đẩy dữ liệu Excel lên hệ thống: ' + error.message, 6000);
+        return;
+      }
+      const count = excelPreviewRows.length;
+      setExcelPreviewRows([]);
+      setExcelFileName('');
+      await fetchAdminData();
+      showToast(`Đã đẩy thành công ${count} hộ dân từ file Excel vào hệ thống!`);
+    } finally {
+      setImportingExcel(false);
+    }
   };
 
   const handleLogin = async (e) => {
@@ -506,7 +681,7 @@ export default function App() {
         let pushMsg = 'Đã đăng thông báo mới!';
         if (sendPushOnAnn) {
           const pushRes = await dispatchOneSignalPush({
-            heading: 'Thông báo mới – Thôn An Sơn',
+            heading: `Thông báo mới – ${appSettings.village_name}`,
             content: annForm.title,
             launchUrl: created ? getPostShareUrl('announcements', created.id) : siteUrl,
             imageUrl: image_url,
@@ -587,7 +762,7 @@ export default function App() {
   };
 
   const exportBackupJSON = () => {
-    const data = { exported_at: new Date().toISOString(), version: APP_VERSION, announcements, news, officials, events, feedbacks, households, residents, customLists, customItems };
+    const data = { exported_at: new Date().toISOString(), version: APP_VERSION, settings: appSettings, announcements, news, officials, events, feedbacks, households, residents, customLists, customItems };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
@@ -612,6 +787,8 @@ export default function App() {
 
   const todayStr = new Date().toLocaleDateString('vi-VN', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' });
   const galleryItems = announcements.filter(a => a.image_url);
+  const culturalHouseMapSrc = buildCulturalHouseMapUrl(appSettings);
+  const culturalHouseExternalUrl = buildCulturalHouseExternalUrl(appSettings);
 
   // ==================== ADMIN VIEW ====================
   if (mode === 'admin') {
@@ -623,7 +800,7 @@ export default function App() {
               <div className="w-14 h-14 bg-emerald-100 text-emerald-700 rounded-2xl flex items-center justify-center mx-auto mb-3">
                 <Lock className="w-7 h-7" />
               </div>
-              <h1 className="text-2xl font-bold text-slate-800">Ban Quản Trị Thôn An Sơn</h1>
+              <h1 className="text-2xl font-bold text-slate-800">Ban Quản Trị {appSettings.village_name}</h1>
               <p className="text-sm text-slate-500 mt-1">Đăng nhập bằng tài khoản quản trị Supabase</p>
             </div>
             <form onSubmit={handleLogin} className="space-y-4">
@@ -658,6 +835,7 @@ export default function App() {
       { id: 'households', label: 'Hộ dân & Dân cư', icon: Shield, color: 'bg-indigo-50 text-indigo-700' },
       { id: 'lists', label: 'Danh sách mở rộng', icon: ListPlus, color: 'bg-purple-50 text-purple-700' },
       { id: 'qr', label: 'Mã QR & In ấn', icon: QrCode, color: 'bg-cyan-50 text-cyan-700' },
+      { id: 'settings', label: 'Cài đặt', icon: Settings, color: 'bg-orange-50 text-orange-700' },
       { id: 'system', label: 'Sao lưu & Phiên bản', icon: RefreshCw, color: 'bg-lime-50 text-lime-700' },
     ];
 
@@ -704,7 +882,7 @@ export default function App() {
 
           {adminTab === 'overview' && (
             <div className="space-y-6">
-              <h1 className="text-2xl font-bold text-slate-800">Tổng quan hệ thống Thôn An Sơn</h1>
+              <h1 className="text-2xl font-bold text-slate-800">Tổng quan hệ thống {appSettings.village_name}</h1>
 
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 {[
@@ -758,6 +936,103 @@ export default function App() {
                 <p className="text-sm text-emerald-700 flex items-center gap-2"><CheckCircle className="w-4 h-4 shrink-0" /> Đã kết nối cơ sở dữ liệu Supabase thời gian thực.</p>
                 <p className="text-sm text-emerald-700 flex items-center gap-2"><CheckCircle className="w-4 h-4 shrink-0" /> Đã kích hoạt cổng gửi thông báo đẩy máy chủ /api/send-push.</p>
               </div>
+            </div>
+          )}
+
+          {adminTab === 'settings' && (
+            <div className="space-y-6">
+              <h1 className="text-2xl font-bold text-slate-800">Cài đặt hệ thống & Ghim Nhà văn hóa</h1>
+              <form onSubmit={handleSaveSettings} className="bg-white p-6 rounded-2xl border shadow-sm space-y-5">
+                <div className="grid md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Tên hiển thị của thôn</label>
+                    <input
+                      required
+                      value={settingsForm.village_name}
+                      onChange={e => setSettingsForm({ ...settingsForm, village_name: e.target.value })}
+                      className="w-full border px-4 py-2.5 rounded-xl text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Dòng địa danh phụ</label>
+                    <input
+                      required
+                      value={settingsForm.subtitle}
+                      onChange={e => setSettingsForm({ ...settingsForm, subtitle: e.target.value })}
+                      className="w-full border px-4 py-2.5 rounded-xl text-sm"
+                    />
+                  </div>
+                </div>
+
+                <div className="border-t pt-4 space-y-4">
+                  <h2 className="font-bold text-emerald-800 flex items-center gap-2">
+                    <MapPin className="w-4 h-4" /> Thiết lập điểm ghim Nhà văn hóa thôn An Sơn trên bản đồ
+                  </h2>
+                  <div className="grid md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Tên địa điểm ghim</label>
+                      <input
+                        required
+                        value={settingsForm.cultural_house_name}
+                        onChange={e => setSettingsForm({ ...settingsForm, cultural_house_name: e.target.value })}
+                        className="w-full border px-4 py-2.5 rounded-xl text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Từ khóa tìm kiếm bản đồ</label>
+                      <input
+                        value={settingsForm.cultural_house_query}
+                        onChange={e => setSettingsForm({ ...settingsForm, cultural_house_query: e.target.value })}
+                        placeholder="Nhà văn hóa thôn An Sơn, Cam Lộ, Quảng Trị"
+                        className="w-full border px-4 py-2.5 rounded-xl text-sm"
+                      />
+                    </div>
+                  </div>
+                  <div className="grid md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Vĩ độ (Latitude – tùy chọn ghim tọa độ chính xác)</label>
+                      <input
+                        value={settingsForm.cultural_house_lat}
+                        onChange={e => setSettingsForm({ ...settingsForm, cultural_house_lat: e.target.value })}
+                        placeholder="Ví dụ: 16.80512"
+                        className="w-full border px-4 py-2.5 rounded-xl text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Kinh độ (Longitude – tùy chọn ghim tọa độ chính xác)</label>
+                      <input
+                        value={settingsForm.cultural_house_lng}
+                        onChange={e => setSettingsForm({ ...settingsForm, cultural_house_lng: e.target.value })}
+                        placeholder="Ví dụ: 107.03456"
+                        className="w-full border px-4 py-2.5 rounded-xl text-sm"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Ghi chú điểm ghim</label>
+                    <input
+                      value={settingsForm.cultural_house_note}
+                      onChange={e => setSettingsForm({ ...settingsForm, cultural_house_note: e.target.value })}
+                      className="w-full border px-4 py-2.5 rounded-xl text-sm"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Khẩu hiệu / Mô tả trang công khai</label>
+                  <input
+                    value={settingsForm.public_notice}
+                    onChange={e => setSettingsForm({ ...settingsForm, public_notice: e.target.value })}
+                    className="w-full border px-4 py-2.5 rounded-xl text-sm"
+                  />
+                </div>
+
+                <div className="flex justify-end">
+                  <button disabled={savingSettings} className="bg-emerald-700 hover:bg-emerald-800 text-white font-semibold px-6 py-2.5 rounded-xl">
+                    {savingSettings ? 'Đang lưu...' : 'Lưu cài đặt'}
+                  </button>
+                </div>
+              </form>
             </div>
           )}
 
@@ -839,7 +1114,7 @@ export default function App() {
                   let msg = 'Đã đăng bài viết!';
                   if (sendPushOnNews) {
                     const pushRes = await dispatchOneSignalPush({
-                      heading: 'Tin tức mới – Thôn An Sơn',
+                      heading: `Tin tức mới – ${appSettings.village_name}`,
                       content: newsForm.title,
                       launchUrl: created ? getPostShareUrl('news', created.id) : siteUrl,
                     });
@@ -925,13 +1200,13 @@ export default function App() {
                   let msg = 'Đã thêm lịch sinh hoạt!';
                   if (sendPushOnEvent) {
                     const pushRes = await dispatchOneSignalPush({
-                      heading: 'Lịch sinh hoạt – Thôn An Sơn',
+                      heading: `Lịch sinh hoạt – ${appSettings.village_name}`,
                       content: `${evtForm.title} (${evtForm.event_time} ngày ${evtForm.event_date})`,
                       launchUrl: created ? getPostShareUrl('events', created.id) : siteUrl,
                     });
                     msg = formatPushResultMessage('Đã thêm lịch sinh hoạt!', pushRes);
                   }
-                  setEvtForm({ title: '', event_date: '', event_time: '19:30', location: 'Nhà văn hóa thôn An Sơn', category: 'Họp dân', description: '' });
+                  setEvtForm({ title: '', event_date: '', event_time: '19:30', location: appSettings.cultural_house_name, category: 'Họp dân', description: '' });
                   fetchPublicData();
                   showToast(msg, 6000);
                 } else showToast('Lỗi: ' + error.message);
@@ -1044,6 +1319,67 @@ export default function App() {
                   </tbody>
                 </table>
               </div>
+
+              {/* Đẩy danh sách hộ dân từ file Excel (đặt ở phía dưới bảng hộ dân) */}
+              <div className="bg-white p-5 rounded-2xl border border-emerald-200 shadow-sm space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h3 className="font-bold text-emerald-900 flex items-center gap-2">
+                      <FileSpreadsheet className="w-5 h-5 text-emerald-700" /> Đẩy danh sách hộ dân từ file Excel (.xlsx, .xls, .csv)
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      Cột hỗ trợ: <strong>Mã hộ</strong>, <strong>Chủ hộ</strong> (bắt buộc), <strong>Khu vực / Xóm</strong>, <strong>SĐT</strong>, <strong>Số người</strong>, <strong>Ghi chú</strong>.
+                    </p>
+                  </div>
+                  <label className="inline-flex items-center gap-2 cursor-pointer bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 px-4 py-2 rounded-xl text-xs font-bold transition">
+                    <Upload className="w-4 h-4" /> Chọn file Excel
+                    <input type="file" accept=".xlsx,.xls,.csv" onChange={handleExcelFileChange} className="hidden" />
+                  </label>
+                </div>
+
+                {excelFileName && (
+                  <div className="text-xs text-slate-700 bg-slate-50 px-3.5 py-2.5 rounded-xl border flex flex-wrap items-center justify-between gap-2">
+                    <span>Tệp đã chọn: <strong>{excelFileName}</strong> ({excelPreviewRows.length} hộ hợp lệ)</span>
+                    {excelPreviewRows.length > 0 && (
+                      <button
+                        type="button"
+                        disabled={importingExcel}
+                        onClick={handlePushExcelToSupabase}
+                        className="bg-emerald-700 hover:bg-emerald-800 text-white font-bold px-4 py-2 rounded-xl disabled:opacity-60"
+                      >
+                        {importingExcel ? 'Đang đẩy lên...' : `Đẩy ${excelPreviewRows.length} hộ lên hệ thống`}
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {excelPreviewRows.length > 0 && (
+                  <div className="overflow-x-auto max-h-56 border rounded-xl">
+                    <table className="w-full text-xs text-left">
+                      <thead className="bg-emerald-50 border-b">
+                        <tr>
+                          <th className="p-2">Mã hộ</th>
+                          <th className="p-2">Chủ hộ</th>
+                          <th className="p-2">Khu vực</th>
+                          <th className="p-2">SĐT</th>
+                          <th className="p-2">Số người</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {excelPreviewRows.slice(0, 20).map((r, idx) => (
+                          <tr key={idx} className="border-b last:border-0">
+                            <td className="p-2 font-mono">{r.household_code}</td>
+                            <td className="p-2 font-semibold">{r.head_name}</td>
+                            <td className="p-2">{r.area}</td>
+                            <td className="p-2">{r.phone}</td>
+                            <td className="p-2">{r.member_count}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
@@ -1118,9 +1454,9 @@ export default function App() {
                 <button onClick={() => window.print()} className="bg-emerald-700 text-white px-5 py-2.5 rounded-xl font-semibold flex items-center gap-2"><Printer className="w-4 h-4" /> In Poster A4</button>
               </div>
               <div className="bg-white p-10 rounded-3xl border-4 border-emerald-700 max-w-xl mx-auto text-center space-y-5 shadow-lg">
-                <div className="text-emerald-800 font-bold tracking-wider text-sm">XÃ CAM LỘ – TỈNH QUẢNG TRỊ</div>
-                <h2 className="text-3xl font-extrabold text-emerald-900">THÔN AN SƠN</h2>
-                <p className="text-slate-600">Thông tin cộng đồng – Kết nối người dân – Chung tay xây dựng quê hương</p>
+                <div className="text-emerald-800 font-bold tracking-wider text-sm uppercase">{appSettings.subtitle}</div>
+                <h2 className="text-3xl font-extrabold text-emerald-900">{appSettings.village_name}</h2>
+                <p className="text-slate-600">{appSettings.public_notice}</p>
                 <QRImage url={siteUrl} size={260} />
                 <p className="text-lg font-bold text-slate-800">QUÉT MÃ QR BẰNG ZALO HOẶC CAMERA ĐIỆN THOẠI</p>
                 <p className="text-sm text-slate-500">Không cần tải app • Không cần đăng nhập • Xem ngay thông báo, lịch họp & danh bạ thôn</p>
@@ -1215,8 +1551,8 @@ export default function App() {
           <div className="flex items-center gap-3.5">
             <img src="/icon.svg" alt="Logo Thôn An Sơn" className="w-14 h-14 rounded-2xl shadow-md bg-white/10 p-1" />
             <div>
-              <h1 className="text-2xl font-extrabold tracking-tight leading-tight">THÔN AN SƠN</h1>
-              <p className="text-xs sm:text-sm text-emerald-100 font-medium mt-0.5">Xã Cam Lộ – Tỉnh Quảng Trị</p>
+              <h1 className="text-2xl font-extrabold tracking-tight leading-tight">{appSettings.village_name}</h1>
+              <p className="text-xs sm:text-sm text-emerald-100 font-medium mt-0.5">{appSettings.subtitle}</p>
             </div>
           </div>
         </div>
@@ -1255,7 +1591,7 @@ export default function App() {
                 <div className="bg-white p-5 rounded-2xl border border-slate-100 text-sm text-slate-500 text-center">Đang tải thông tin thôn...</div>
               ) : announcements.length === 0 ? (
                 <div className="bg-white p-5 rounded-2xl border border-slate-100 text-center space-y-2">
-                  <p className="text-sm font-semibold text-slate-700">Chào mừng bà con đến với cổng thông tin Thôn An Sơn</p>
+                  <p className="text-sm font-semibold text-slate-700">Chào mừng bà con đến với cổng thông tin {appSettings.village_name}</p>
                   <p className="text-xs text-slate-500">Chưa có thông báo mới. Ban thôn sẽ cập nhật kịp thời tại đây.</p>
                 </div>
               ) : (
@@ -1303,7 +1639,7 @@ export default function App() {
 
         {tab === 'announcements' && (
           <div className="space-y-4">
-            <h2 className="text-xl font-bold text-slate-800">Thông báo Thôn An Sơn</h2>
+            <h2 className="text-xl font-bold text-slate-800">Thông báo {appSettings.village_name}</h2>
             {announcements.length === 0 && <p className="text-slate-500 text-sm">Chưa có thông báo nào.</p>}
             {announcements.map(a => {
               const postKey = `announcements-${a.id}`;
@@ -1373,7 +1709,7 @@ export default function App() {
 
         {tab === 'officials' && (
           <div className="space-y-4">
-            <h2 className="text-xl font-bold text-slate-800">Danh sách Cán bộ, Đoàn thể Thôn An Sơn</h2>
+            <h2 className="text-xl font-bold text-slate-800">Danh sách Cán bộ, Đoàn thể {appSettings.village_name}</h2>
             <div className="relative">
               <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
               <input placeholder="Tìm theo tên hoặc chức vụ..." value={searchOfficial} onChange={e => setSearchOfficial(e.target.value)} className="w-full bg-white border border-slate-200 pl-10 pr-4 py-2.5 rounded-xl text-sm" />
@@ -1449,26 +1785,43 @@ export default function App() {
 
         {tab === 'map' && (
           <div className="space-y-4">
-            <h2 className="text-xl font-bold text-slate-800">Bản đồ & Địa điểm Thôn An Sơn</h2>
+            <h2 className="text-xl font-bold text-slate-800">Bản đồ & Ghim Nhà văn hóa thôn An Sơn</h2>
             <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm space-y-3">
+              <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3.5 flex items-start gap-3">
+                <div className="w-9 h-9 rounded-xl bg-emerald-700 text-white flex items-center justify-center shrink-0 mt-0.5">
+                  <MapPin className="w-5 h-5" />
+                </div>
+                <div className="space-y-1 text-sm">
+                  <div className="font-extrabold text-emerald-950 flex flex-wrap items-center gap-2">
+                    <span>📍 Đã ghim: {appSettings.cultural_house_name}</span>
+                    {appSettings.cultural_house_lat && appSettings.cultural_house_lng && (
+                      <span className="text-[11px] font-mono bg-white text-emerald-800 px-2 py-0.5 rounded-full border border-emerald-200">
+                        {appSettings.cultural_house_lat}, {appSettings.cultural_house_lng}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-slate-600">{appSettings.cultural_house_note || appSettings.address}</p>
+                </div>
+              </div>
+
               <div className="overflow-hidden rounded-xl border border-slate-200">
                 <iframe
-                  title="Bản đồ Thôn An Sơn, xã Cam Lộ"
-                  src="https://maps.google.com/maps?q=Th%C3%B4n%20An%20S%C6%A1n,%20Cam%20L%E1%BB%99,%20Qu%E1%BA%A3ng%20Tr%E1%BB%8B&t=&z=14&ie=UTF8&iwloc=&output=embed"
+                  title={`Bản đồ ${appSettings.cultural_house_name}`}
+                  src={culturalHouseMapSrc}
                   className="w-full h-72 border-0"
                   loading="lazy"
                 />
               </div>
               <div className="space-y-2 pt-1">
-                <div className="font-bold text-slate-800 flex items-center gap-2"><MapPin className="w-4 h-4 text-emerald-700" /> Nhà văn hóa & Trung tâm Văn hóa Thôn An Sơn</div>
-                <p className="text-xs text-slate-500">Địa chỉ: Thôn An Sơn, xã Cam Lộ, tỉnh Quảng Trị</p>
+                <div className="font-bold text-slate-800 flex items-center gap-2"><MapPin className="w-4 h-4 text-emerald-700" /> {appSettings.cultural_house_name}</div>
+                <p className="text-xs text-slate-500">Địa chỉ: {appSettings.address}</p>
                 <a
-                  href="https://www.google.com/maps/search/?api=1&query=Th%C3%B4n+An+S%C6%A1n+Cam+L%E1%BB%99+Qu%E1%BA%A3ng+Tr%E1%BB%8B"
+                  href={culturalHouseExternalUrl}
                   target="_blank"
                   rel="noreferrer"
                   className="inline-flex items-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white px-4 py-2.5 rounded-xl text-xs font-bold"
                 >
-                   Mở chỉ đường trên Google Maps <ExternalLink className="w-3.5 h-3.5" />
+                   Mở chỉ đường tới Nhà văn hóa trên Google Maps <ExternalLink className="w-3.5 h-3.5" />
                 </a>
               </div>
             </div>
@@ -1479,7 +1832,7 @@ export default function App() {
           <div className="space-y-4">
             <h2 className="text-xl font-bold text-slate-800">Liên hệ nhanh & Số khẩn cấp</h2>
             <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-3">
-              <h3 className="font-bold text-emerald-800 text-sm uppercase">Ban quản lý & Tổ ANTT Thôn An Sơn</h3>
+              <h3 className="font-bold text-emerald-800 text-sm uppercase">Ban quản lý & Tổ ANTT {appSettings.village_name}</h3>
               {officials.length === 0 ? (
                 <p className="text-sm text-slate-500">Xem danh bạ chi tiết trong mục Cán bộ.</p>
               ) : (
@@ -1521,7 +1874,7 @@ export default function App() {
 
         {tab === 'gallery' && (
           <div className="space-y-4">
-            <h2 className="text-xl font-bold text-slate-800">Thư viện ảnh hoạt động Thôn An Sơn</h2>
+            <h2 className="text-xl font-bold text-slate-800">Thư viện ảnh hoạt động {appSettings.village_name}</h2>
             {galleryItems.length === 0 ? (
               <div className="bg-white p-6 rounded-2xl border border-slate-100 text-center text-sm text-slate-500">
                 Chưa có hình ảnh nào được đăng tải. Hình ảnh đính kèm trong các thông báo của thôn sẽ tự động hiển thị tại đây.
@@ -1547,7 +1900,7 @@ export default function App() {
             <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm text-center space-y-3">
               <h3 className="font-bold text-lg text-slate-800">Mã QR truy cập nhanh</h3>
               <QRImage url={siteUrl} size={200} />
-              <p className="text-xs text-slate-500">Đưa mã này cho bà con quét bằng Zalo hoặc Camera điện thoại để mở ngay ứng dụng Thôn An Sơn.</p>
+              <p className="text-xs text-slate-500">Đưa mã này cho bà con quét bằng Zalo hoặc Camera điện thoại để mở ngay ứng dụng {appSettings.village_name}.</p>
             </div>
 
             <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm">
@@ -1591,7 +1944,7 @@ export default function App() {
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setShowQRModal(false)}>
           <div className="bg-white rounded-3xl p-6 max-w-sm w-full text-center space-y-4" onClick={e => e.stopPropagation()}>
             <div className="flex justify-between items-center">
-              <h3 className="font-bold text-emerald-800">Chia sẻ Thôn An Sơn</h3>
+              <h3 className="font-bold text-emerald-800">Chia sẻ {appSettings.village_name}</h3>
               <button onClick={() => setShowQRModal(false)}><X className="w-5 h-5 text-slate-400" /></button>
             </div>
             <QRImage url={siteUrl} size={220} />
