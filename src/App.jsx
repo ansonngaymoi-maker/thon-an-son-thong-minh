@@ -5,11 +5,11 @@ import {
   CheckCircle, AlertTriangle, Download, Printer, ListPlus,
   Home as HomeIcon, Lock, RefreshCw, ChevronRight, X,
   Image as ImageIcon, Map, PhoneCall, ExternalLink, Copy, Check, ArrowDown,
-  Settings, FileSpreadsheet, Upload
+  Settings, FileSpreadsheet, Upload, Lightbulb
 } from 'lucide-react';
 import { supabase, isConfigured } from './supabaseClient';
 
-const APP_VERSION = 'v1.5.4';
+const APP_VERSION = 'v1.5.5';
 const SEEN_IDS_KEY = 'thon_an_son_seen_post_ids_v1';
 const SETTINGS_STORAGE_KEY = 'thon_an_son_app_settings_v1';
 const ONESIGNAL_APP_ID =
@@ -22,8 +22,8 @@ const DEFAULT_SETTINGS = {
   address: 'Thôn An Sơn, xã Cam Lộ, tỉnh Quảng Trị',
   cultural_house_name: 'Nhà văn hóa thôn An Sơn',
   cultural_house_query: 'Nhà văn hóa thôn An Sơn, Cam Lộ, Quảng Trị',
-  cultural_house_lat: '',
-  cultural_house_lng: '',
+  cultural_house_lat: '16.74527',
+  cultural_house_lng: '106.9635',
   cultural_house_note: 'Điểm sinh hoạt cộng đồng, hội họp và đón tiếp bà con thôn An Sơn.',
   public_notice: 'Thông tin cộng đồng – Kết nối người dân – Chung tay xây dựng quê hương',
 };
@@ -73,6 +73,8 @@ const buildCulturalHouseExternalUrl = (settings) => {
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
 };
 
+const isSuggestionRecord = (fb) => String(fb?.category || '').startsWith('[GÓP Ý]');
+
 export default function App() {
   const isInitialAdmin = typeof window !== 'undefined' && window.location.pathname.startsWith('/admin');
   const [mode, setMode] = useState(isInitialAdmin ? 'admin' : 'public');
@@ -110,6 +112,7 @@ export default function App() {
 
   // Admin private data
   const [feedbacks, setFeedbacks] = useState([]);
+  const [feedbackFilter, setFeedbackFilter] = useState('all'); // 'all' | 'feedback' | 'suggestion'
   const [households, setHouseholds] = useState([]);
   const [residents, setResidents] = useState([]);
 
@@ -143,8 +146,18 @@ export default function App() {
   const [sendPushOnNews, setSendPushOnNews] = useState(true);
   const [sendPushOnEvent, setSendPushOnEvent] = useState(true);
 
-  // Feedback form
+  // Feedback form (Phản ánh kiến nghị)
   const [fbForm, setFbForm] = useState({ sender_name: '', sender_phone: '', category: 'Đường làng, ngõ xóm', content: '' });
+
+  // Suggestion form (Góp ý xây dựng thôn - bắt buộc đầy đủ thông tin người góp ý)
+  const [sugForm, setSugForm] = useState({
+    sender_name: '',
+    sender_phone: '',
+    area: '',
+    topic: 'Xây dựng đời sống văn hóa, nông thôn mới',
+    content: '',
+  });
+  const [submittingSug, setSubmittingSug] = useState(false);
 
   // Admin forms
   const [annForm, setAnnForm] = useState({ title: '', content: '', priority: 'normal', is_pinned: false });
@@ -161,6 +174,15 @@ export default function App() {
   const showToast = (msg, duration = 5000) => {
     setToast(msg);
     setTimeout(() => setToast(''), duration);
+  };
+
+  const goHomePublic = () => {
+    setMode('public');
+    setTab('home');
+    setHighlightedPost('');
+    if (typeof window !== 'undefined') {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
   };
 
   const dispatchOneSignalPush = async ({ heading, content, launchUrl, imageUrl }) => {
@@ -630,6 +652,44 @@ export default function App() {
     }
   };
 
+  const handleSuggestionSubmit = async (e) => {
+    e.preventDefault();
+    const cleanName = sugForm.sender_name.trim();
+    const cleanPhone = sugForm.sender_phone.trim();
+    const cleanArea = sugForm.area.trim();
+    const cleanContent = sugForm.content.trim();
+
+    if (!cleanName || !cleanPhone || !cleanArea || !cleanContent) {
+      showToast('Vui lòng nhập đầy đủ Họ tên, Số điện thoại, Khu vực/Xóm và Nội dung góp ý.');
+      return;
+    }
+
+    setSubmittingSug(true);
+    try {
+      const payload = {
+        sender_name: cleanName,
+        sender_phone: `${cleanPhone} (${cleanArea})`,
+        category: `[GÓP Ý] ${sugForm.topic}`,
+        content: cleanContent,
+      };
+      const { error } = await supabase.from('feedbacks').insert([payload]);
+      if (!error) {
+        setSugForm({
+          sender_name: '',
+          sender_phone: '',
+          area: '',
+          topic: 'Xây dựng đời sống văn hóa, nông thôn mới',
+          content: '',
+        });
+        showToast('Đã gửi góp ý tâm huyết tới Ban quản trị thôn. Xin trân trọng cảm ơn!');
+      } else {
+        showToast('Lỗi gửi góp ý: ' + error.message);
+      }
+    } finally {
+      setSubmittingSug(false);
+    }
+  };
+
   const handleAnnImageChange = (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -817,7 +877,7 @@ export default function App() {
                 {authLoading ? 'Đang đăng nhập...' : 'Đăng nhập'}
               </button>
             </form>
-            <button onClick={() => setMode('public')} className="w-full mt-4 text-sm text-slate-500 hover:text-emerald-700">
+            <button onClick={goHomePublic} className="w-full mt-4 text-sm text-slate-500 hover:text-emerald-700">
               ← Quay lại trang công khai cho người dân
             </button>
           </div>
@@ -825,13 +885,20 @@ export default function App() {
       );
     }
 
+    const newReceivedCount = feedbacks.filter(f => f.status === 'received').length;
+    const filteredFeedbackList = feedbacks.filter((fb) => {
+      if (feedbackFilter === 'suggestion') return isSuggestionRecord(fb);
+      if (feedbackFilter === 'feedback') return !isSuggestionRecord(fb);
+      return true;
+    });
+
     const adminMenu = [
       { id: 'overview', label: 'Tổng quan', icon: HomeIcon, color: 'bg-slate-100 text-slate-700' },
       { id: 'announcements', label: 'Thông báo', icon: Bell, color: 'bg-red-50 text-red-600' },
       { id: 'news', label: 'Tin tức', icon: Newspaper, color: 'bg-emerald-50 text-emerald-700' },
       { id: 'officials', label: 'Cán bộ', icon: Users, color: 'bg-sky-50 text-sky-700' },
       { id: 'events', label: 'Lịch thôn', icon: Calendar, color: 'bg-teal-50 text-teal-700' },
-      { id: 'feedbacks', label: `Phản ánh (${feedbacks.filter(f => f.status === 'received').length})`, icon: MessageSquare, color: 'bg-amber-50 text-amber-700' },
+      { id: 'feedbacks', label: `Phản ánh & Góp ý (${newReceivedCount})`, icon: MessageSquare, color: 'bg-amber-50 text-amber-700' },
       { id: 'households', label: 'Hộ dân & Dân cư', icon: Shield, color: 'bg-indigo-50 text-indigo-700' },
       { id: 'lists', label: 'Danh sách mở rộng', icon: ListPlus, color: 'bg-purple-50 text-purple-700' },
       { id: 'qr', label: 'Mã QR & In ấn', icon: QrCode, color: 'bg-cyan-50 text-cyan-700' },
@@ -845,12 +912,19 @@ export default function App() {
 
         <aside className="w-full md:w-64 bg-emerald-900 text-white p-4 flex flex-col no-print">
           <div className="mb-4 md:mb-6 pb-3 md:pb-4 border-b border-emerald-800 flex items-center justify-between md:block">
-            <div>
-              <h2 className="font-bold text-lg">QUẢN TRỊ AN SƠN</h2>
+            <button
+              type="button"
+              onClick={goHomePublic}
+              className="text-left group cursor-pointer"
+              title="Bấm để về Trang chủ người dân"
+            >
+              <h2 className="font-bold text-lg flex items-center gap-1.5 group-hover:text-emerald-200 transition">
+                <Home className="w-4 h-4 shrink-0" /> QUẢN TRỊ AN SƠN
+              </h2>
               <p className="text-xs text-emerald-300 truncate">{session.user.email} • {APP_VERSION}</p>
-            </div>
+            </button>
             <div className="flex gap-2 md:hidden">
-              <button onClick={() => setMode('public')} className="bg-emerald-800 hover:bg-emerald-700 px-3 py-1.5 rounded-lg text-xs font-medium">Trang dân</button>
+              <button onClick={goHomePublic} className="bg-emerald-800 hover:bg-emerald-700 px-3 py-1.5 rounded-lg text-xs font-medium">Trang dân</button>
               <button onClick={handleLogout} className="bg-red-600/80 hover:bg-red-600 px-2.5 py-1.5 rounded-lg text-xs font-medium"><LogOut className="w-3.5 h-3.5" /></button>
             </div>
           </div>
@@ -865,7 +939,7 @@ export default function App() {
             })}
           </nav>
           <div className="hidden md:flex mt-4 pt-4 border-t border-emerald-800 gap-2">
-            <button onClick={() => setMode('public')} className="flex-1 bg-emerald-800 hover:bg-emerald-700 py-2 rounded-lg text-xs font-medium">Trang dân</button>
+            <button onClick={goHomePublic} className="flex-1 bg-emerald-800 hover:bg-emerald-700 py-2 rounded-lg text-xs font-medium">Trang dân</button>
             <button onClick={handleLogout} className="flex items-center justify-center gap-1 bg-red-600/80 hover:bg-red-600 px-3 py-2 rounded-lg text-xs font-medium"><LogOut className="w-3.5 h-3.5" /> Thoát</button>
           </div>
         </aside>
@@ -889,7 +963,7 @@ export default function App() {
                   { id: 'announcements', label: 'Thông báo', val: announcements.length, color: 'bg-emerald-600 hover:bg-emerald-700' },
                   { id: 'officials', label: 'Cán bộ, đoàn thể', val: officials.length, color: 'bg-sky-600 hover:bg-sky-700' },
                   { id: 'households', label: 'Hộ dân (Nội bộ)', val: households.length, color: 'bg-indigo-600 hover:bg-indigo-700' },
-                  { id: 'feedbacks', label: 'Phản ánh mới', val: feedbacks.filter(f => f.status === 'received').length, color: 'bg-amber-600 hover:bg-amber-700' },
+                  { id: 'feedbacks', label: 'Phản ánh & Góp ý mới', val: newReceivedCount, color: 'bg-amber-600 hover:bg-amber-700' },
                 ].map((c) => (
                   <button
                     key={c.id}
@@ -990,20 +1064,20 @@ export default function App() {
                   </div>
                   <div className="grid md:grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Vĩ độ (Latitude – tùy chọn ghim tọa độ chính xác)</label>
+                      <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Vĩ độ (Latitude – ghim tọa độ chính xác)</label>
                       <input
                         value={settingsForm.cultural_house_lat}
                         onChange={e => setSettingsForm({ ...settingsForm, cultural_house_lat: e.target.value })}
-                        placeholder="Ví dụ: 16.80512"
+                        placeholder="Ví dụ: 16.74527"
                         className="w-full border px-4 py-2.5 rounded-xl text-sm"
                       />
                     </div>
                     <div>
-                      <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Kinh độ (Longitude – tùy chọn ghim tọa độ chính xác)</label>
+                      <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Kinh độ (Longitude – ghim tọa độ chính xác)</label>
                       <input
                         value={settingsForm.cultural_house_lng}
                         onChange={e => setSettingsForm({ ...settingsForm, cultural_house_lng: e.target.value })}
-                        placeholder="Ví dụ: 107.03456"
+                        placeholder="Ví dụ: 106.9635"
                         className="w-full border px-4 py-2.5 rounded-xl text-sm"
                       />
                     </div>
@@ -1235,22 +1309,55 @@ export default function App() {
 
           {adminTab === 'feedbacks' && (
             <div className="space-y-4">
-              <h1 className="text-2xl font-bold">Phản ánh & Góp ý từ bà con (Nội bộ)</h1>
-              {feedbacks.length === 0 && <p className="text-slate-500">Chưa có phản ánh nào.</p>}
-              {feedbacks.map(fb => (
-                <div key={fb.id} className="bg-white p-5 rounded-2xl border space-y-2">
-                  <div className="flex justify-between items-center">
-                    <span className="text-xs font-bold px-2.5 py-1 rounded-full bg-sky-100 text-sky-800">{fb.category}</span>
-                    <select value={fb.status} onChange={async (e) => { await supabase.from('feedbacks').update({ status: e.target.value }).eq('id', fb.id); fetchAdminData(); showToast('Đã cập nhật trạng thái'); }} className="border rounded-lg px-2 py-1 text-xs">
-                      <option value="received">Đã tiếp nhận</option>
-                      <option value="reviewing">Đang xem xét</option>
-                      <option value="resolved">Đã phản hồi / Xử lý</option>
-                    </select>
-                  </div>
-                  <p className="text-slate-800">{fb.content}</p>
-                  <div className="text-xs text-slate-500">Người gửi: {fb.sender_name || 'Ẩn danh'} • SĐT: {fb.sender_phone || 'Không cung cấp'}</div>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h1 className="text-2xl font-bold">Phản ánh & Góp ý từ bà con (Nội bộ)</h1>
+                  <p className="text-xs text-slate-500 mt-0.5">Thông tin người gửi và nội dung chỉ hiển thị trong khu vực Ban quản trị.</p>
                 </div>
-              ))}
+                <div className="flex gap-1.5 bg-white p-1 rounded-xl border text-xs font-semibold">
+                  {[
+                    { id: 'all', label: `Tất cả (${feedbacks.length})` },
+                    { id: 'suggestion', label: `Góp ý cho thôn (${feedbacks.filter(isSuggestionRecord).length})` },
+                    { id: 'feedback', label: `Phản ánh (${feedbacks.filter(fb => !isSuggestionRecord(fb)).length})` },
+                  ].map((f) => (
+                    <button
+                      key={f.id}
+                      type="button"
+                      onClick={() => setFeedbackFilter(f.id)}
+                      className={`px-3 py-1.5 rounded-lg transition ${feedbackFilter === f.id ? 'bg-emerald-700 text-white' : 'text-slate-600 hover:bg-slate-100'}`}
+                    >
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {filteredFeedbackList.length === 0 && <p className="text-slate-500 text-sm">Chưa có mục nào trong nhóm này.</p>}
+              {filteredFeedbackList.map(fb => {
+                const isSug = isSuggestionRecord(fb);
+                const displayCat = isSug ? fb.category.replace(/^\[GÓP Ý\]\s*/, '') : fb.category;
+                return (
+                  <div key={fb.id} className={`bg-white p-5 rounded-2xl border space-y-2 ${isSug ? 'border-l-4 border-l-emerald-600' : 'border-l-4 border-l-amber-500'}`}>
+                    <div className="flex flex-wrap justify-between items-center gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className={`text-[11px] font-extrabold px-2.5 py-0.5 rounded-full ${isSug ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}`}>
+                          {isSug ? 'GÓP Ý XÂY DỰNG THÔN' : 'PHẢN ÁNH KIẾN NGHỊ'}
+                        </span>
+                        <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-700">{displayCat}</span>
+                      </div>
+                      <select value={fb.status} onChange={async (e) => { await supabase.from('feedbacks').update({ status: e.target.value }).eq('id', fb.id); fetchAdminData(); showToast('Đã cập nhật trạng thái'); }} className="border rounded-lg px-2 py-1 text-xs">
+                        <option value="received">Đã tiếp nhận</option>
+                        <option value="reviewing">Đang xem xét</option>
+                        <option value="resolved">Đã phản hồi / Xử lý</option>
+                      </select>
+                    </div>
+                    <p className="text-slate-800 whitespace-pre-line">{fb.content}</p>
+                    <div className="text-xs text-slate-600 bg-slate-50 px-3 py-2 rounded-xl border border-slate-100">
+                      <strong>Người gửi:</strong> {fb.sender_name || 'Ẩn danh'} • <strong>Liên hệ / Khu vực:</strong> {fb.sender_phone || 'Không cung cấp'} • <span className="text-slate-400">{new Date(fb.created_at).toLocaleString('vi-VN')}</span>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
 
@@ -1320,7 +1427,6 @@ export default function App() {
                 </table>
               </div>
 
-              {/* Đẩy danh sách hộ dân từ file Excel (đặt ở phía dưới bảng hộ dân) */}
               <div className="bg-white p-5 rounded-2xl border border-emerald-200 shadow-sm space-y-4">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
@@ -1496,6 +1602,7 @@ export default function App() {
     { id: 'events', label: 'Lịch thôn', icon: Calendar, iconColor: 'text-sky-600', bgColor: 'bg-sky-50' },
     { id: 'officials', label: 'Cán bộ', icon: Users, iconColor: 'text-indigo-600', bgColor: 'bg-indigo-50' },
     { id: 'feedback', label: 'Phản ánh', icon: MessageSquare, iconColor: 'text-amber-500', bgColor: 'bg-amber-50' },
+    { id: 'suggest', label: 'Góp ý', icon: Lightbulb, iconColor: 'text-emerald-700', bgColor: 'bg-emerald-100/70' },
     { id: 'map', label: 'Bản đồ', icon: MapPin, iconColor: 'text-teal-600', bgColor: 'bg-teal-50' },
     { id: 'contact', label: 'Liên hệ', icon: PhoneCall, iconColor: 'text-blue-600', bgColor: 'bg-blue-50' },
     { id: 'gallery', label: 'Thư viện ảnh', icon: ImageIcon, iconColor: 'text-purple-600', bgColor: 'bg-purple-50' },
@@ -1548,13 +1655,18 @@ export default function App() {
               </button>
             </div>
           </div>
-          <div className="flex items-center gap-3.5">
-            <img src="/icon.svg" alt="Logo Thôn An Sơn" className="w-14 h-14 rounded-2xl shadow-md bg-white/10 p-1" />
+          <button
+            type="button"
+            onClick={goHomePublic}
+            className="flex items-center gap-3.5 text-left group cursor-pointer active:scale-[0.99] transition"
+            title="Bấm vào ngôi nhà để quay về Trang chủ"
+          >
+            <img src="/icon.svg" alt="Logo Thôn An Sơn" className="w-14 h-14 rounded-2xl shadow-md bg-white/10 p-1 group-hover:bg-white/20 transition" />
             <div>
               <h1 className="text-2xl font-extrabold tracking-tight leading-tight">{appSettings.village_name}</h1>
               <p className="text-xs sm:text-sm text-emerald-100 font-medium mt-0.5">{appSettings.subtitle}</p>
             </div>
-          </div>
+          </button>
         </div>
       </header>
 
@@ -1762,7 +1874,7 @@ export default function App() {
 
         {tab === 'feedback' && (
           <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm space-y-4">
-            <h2 className="text-xl font-bold text-slate-800">Gửi Phản ánh & Góp ý</h2>
+            <h2 className="text-xl font-bold text-slate-800">Gửi Phản ánh & Kiến nghị</h2>
             <p className="text-sm text-slate-500">Không cần đăng nhập. Mọi thông tin cá nhân và phản ánh của bà con được bảo mật, chỉ Ban thôn tiếp nhận xử lý.</p>
             <form onSubmit={handleFeedbackSubmit} className="space-y-3">
               <div className="grid sm:grid-cols-2 gap-3">
@@ -1775,10 +1887,99 @@ export default function App() {
                 <option>Điện chiếu sáng</option>
                 <option>An ninh, trật tự</option>
                 <option>Hoạt động cộng đồng</option>
-                <option>Ý kiến góp ý khác</option>
+                <option>Ý kiến kiến nghị khác</option>
               </select>
-              <textarea required rows={4} placeholder="Nhập nội dung phản ánh hoặc góp ý của bà con..." value={fbForm.content} onChange={e => setFbForm({ ...fbForm, content: e.target.value })} className="w-full border px-4 py-2.5 rounded-xl text-sm" />
-              <button className="w-full bg-emerald-700 hover:bg-emerald-800 text-white font-semibold py-3 rounded-xl">Gửi phản ánh đến Ban thôn</button>
+              <textarea required rows={4} placeholder="Nhập nội dung phản ánh hoặc kiến nghị của bà con..." value={fbForm.content} onChange={e => setFbForm({ ...fbForm, content: e.target.value })} className="w-full border px-4 py-2.5 rounded-xl text-sm" />
+              <button className="w-full bg-amber-600 hover:bg-amber-700 text-white font-semibold py-3 rounded-xl">Gửi phản ánh đến Ban thôn</button>
+            </form>
+          </div>
+        )}
+
+        {tab === 'suggest' && (
+          <div className="bg-white p-6 rounded-2xl border border-emerald-200 shadow-sm space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0">
+                <Lightbulb className="w-5 h-5" />
+              </div>
+              <div>
+                <h2 className="text-xl font-bold text-slate-800">Góp ý xây dựng {appSettings.village_name}</h2>
+                <p className="text-xs sm:text-sm text-slate-600 mt-1">
+                  Đóng góp ý tưởng, hiến kế phát triển kinh tế – văn hóa – cảnh quan thôn quê. Mọi thông tin người góp ý được <strong>bảo mật tuyệt đối</strong>, chỉ <strong>Ban quản trị thôn</strong> nắm thông tin để trao đổi, tiếp thu.
+                </p>
+              </div>
+            </div>
+
+            <form onSubmit={handleSuggestionSubmit} className="space-y-3 pt-1">
+              <div className="grid sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Họ và tên người góp ý <span className="text-red-600">*</span></label>
+                  <input
+                    required
+                    placeholder="Nhập đầy đủ họ và tên..."
+                    value={sugForm.sender_name}
+                    onChange={e => setSugForm({ ...sugForm, sender_name: e.target.value })}
+                    className="w-full border px-4 py-2.5 rounded-xl text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Số điện thoại liên hệ <span className="text-red-600">*</span></label>
+                  <input
+                    required
+                    type="tel"
+                    placeholder="Nhập số điện thoại..."
+                    value={sugForm.sender_phone}
+                    onChange={e => setSugForm({ ...sugForm, sender_phone: e.target.value })}
+                    className="w-full border px-4 py-2.5 rounded-xl text-sm"
+                  />
+                </div>
+              </div>
+
+              <div className="grid sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Khu vực / Xóm / Hộ gia đình <span className="text-red-600">*</span></label>
+                  <input
+                    required
+                    placeholder="Ví dụ: Xóm 2, thôn An Sơn..."
+                    value={sugForm.area}
+                    onChange={e => setSugForm({ ...sugForm, area: e.target.value })}
+                    className="w-full border px-4 py-2.5 rounded-xl text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Lĩnh vực góp ý</label>
+                  <select
+                    value={sugForm.topic}
+                    onChange={e => setSugForm({ ...sugForm, topic: e.target.value })}
+                    className="w-full border px-4 py-2.5 rounded-xl text-sm"
+                  >
+                    <option>Xây dựng đời sống văn hóa, nông thôn mới</option>
+                    <option>Phát triển kinh tế, du lịch vùng Cùa</option>
+                    <option>Hạ tầng, đường giao thông, cảnh quan</option>
+                    <option>Hoạt động đoàn thể, thanh thiếu niên</option>
+                    <option>Chuyển đổi số, cải tiến ứng dụng thôn</option>
+                    <option>Góp ý khác cho Ban quản lý thôn</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Nội dung góp ý chi tiết <span className="text-red-600">*</span></label>
+                <textarea
+                  required
+                  rows={4}
+                  placeholder="Nhập nội dung góp ý xây dựng thôn An Sơn..."
+                  value={sugForm.content}
+                  onChange={e => setSugForm({ ...sugForm, content: e.target.value })}
+                  className="w-full border px-4 py-2.5 rounded-xl text-sm"
+                />
+              </div>
+
+              <button
+                disabled={submittingSug}
+                className="w-full bg-emerald-700 hover:bg-emerald-800 text-white font-semibold py-3 rounded-xl disabled:opacity-60"
+              >
+                {submittingSug ? 'Đang gửi góp ý...' : 'Gửi góp ý tới Ban quản trị thôn'}
+              </button>
             </form>
           </div>
         )}
@@ -1928,11 +2129,12 @@ export default function App() {
           { id: 'announcements', label: 'Thông báo', icon: Bell },
           { id: 'officials', label: 'Cán bộ', icon: Users },
           { id: 'feedback', label: 'Phản ánh', icon: MessageSquare },
+          { id: 'suggest', label: 'Góp ý', icon: Lightbulb },
         ].map(n => {
           const Icon = n.icon;
           const active = tab === n.id;
           return (
-            <button key={n.id} onClick={() => setTab(n.id)} className={`flex flex-col items-center gap-0.5 px-3 py-1 ${active ? 'text-emerald-700 font-bold' : 'text-slate-500'}`}>
+            <button key={n.id} onClick={() => setTab(n.id)} className={`flex flex-col items-center gap-0.5 px-2.5 py-1 ${active ? 'text-emerald-700 font-bold' : 'text-slate-500'}`}>
               <Icon className="w-5 h-5" />
               <span className="text-[11px]">{n.label}</span>
             </button>
