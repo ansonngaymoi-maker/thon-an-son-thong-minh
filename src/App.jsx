@@ -5,11 +5,12 @@ import {
   CheckCircle, AlertTriangle, Download, Printer, ListPlus,
   Home as HomeIcon, Lock, RefreshCw, ChevronRight, X,
   Image as ImageIcon, Map, PhoneCall, ExternalLink, Copy, Check, ArrowDown,
-  Settings, FileSpreadsheet, Upload, Lightbulb, HeartHandshake, Pencil, Wallet
+  Settings, FileSpreadsheet, Upload, Lightbulb, HeartHandshake, Pencil, Wallet,
+  Sparkles, Compass
 } from 'lucide-react';
 import { supabase, isConfigured } from './supabaseClient';
 
-const APP_VERSION = 'v1.5.7';
+const APP_VERSION = 'v1.6.0';
 const SEEN_IDS_KEY = 'thon_an_son_seen_post_ids_v1';
 const SETTINGS_STORAGE_KEY = 'thon_an_son_app_settings_v1';
 const DONATION_LIST_MARKER = '__THON_AN_SON_UNG_HO__';
@@ -127,8 +128,15 @@ const syncOneSignalAdminTag = (isAdmin) => {
 export default function App() {
   const isInitialAdmin = typeof window !== 'undefined' && window.location.pathname.startsWith('/admin');
   const [mode, setMode] = useState(isInitialAdmin ? 'admin' : 'public');
+  // Các tab thông minh phía người dân: 'home' | 'feed' | 'finance' | 'directory' | 'voice'
   const [tab, setTab] = useState('home');
+  const [feedSubTab, setFeedSubTab] = useState('all'); // 'all' | 'announcements' | 'news' | 'events' | 'gallery'
+  const [directorySubTab, setDirectorySubTab] = useState('officials'); // 'officials' | 'map' | 'qr'
+  const [voiceSubTab, setVoiceSubTab] = useState('feedback'); // 'feedback' | 'suggest'
   const [adminTab, setAdminTab] = useState('overview');
+
+  // Global quick search on Home
+  const [quickSearch, setQuickSearch] = useState('');
 
   // Auth
   const [session, setSession] = useState(null);
@@ -171,7 +179,7 @@ export default function App() {
   const [importingExcel, setImportingExcel] = useState(false);
 
   // Finance & Donations states (Ủng hộ & Thu chi)
-  const [financePublicSubTab, setFinancePublicSubTab] = useState('donations');
+  const [financePublicSubTab, setFinancePublicSubTab] = useState('donations'); // 'donations' | 'ledger' | 'lists'
   const [searchFinance, setSearchFinance] = useState('');
   const [editingDonationId, setEditingDonationId] = useState(null);
   const [sendPushOnDonation, setSendPushOnDonation] = useState(true);
@@ -255,6 +263,19 @@ export default function App() {
     setMode('public');
     setTab('home');
     setHighlightedPost('');
+    setQuickSearch('');
+    if (typeof window !== 'undefined') {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  };
+
+  const navigatePublic = (targetTab, subTab) => {
+    setMode('public');
+    setTab(targetTab);
+    if (targetTab === 'feed' && subTab) setFeedSubTab(subTab);
+    if (targetTab === 'directory' && subTab) setDirectorySubTab(subTab);
+    if (targetTab === 'voice' && subTab) setVoiceSubTab(subTab);
+    if (targetTab === 'finance' && subTab) setFinancePublicSubTab(subTab);
     if (typeof window !== 'undefined') {
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
@@ -432,12 +453,15 @@ export default function App() {
     }
     setMode('public');
     setHighlightedPost(postKey);
+    setTab('feed');
     if (postKey.startsWith('announcements-')) {
-      setTab('announcements');
+      setFeedSubTab('announcements');
     } else if (postKey.startsWith('news-')) {
-      setTab('news');
+      setFeedSubTab('news');
     } else if (postKey.startsWith('events-')) {
-      setTab('events');
+      setFeedSubTab('events');
+    } else {
+      setFeedSubTab('all');
     }
     setTimeout(() => {
       const el = document.getElementById(`post-${postKey}`);
@@ -2333,7 +2357,7 @@ export default function App() {
                 <div className="flex items-center justify-between">
                   <div>
                     <div className="font-bold text-lg">Phiên bản hiện tại: {APP_VERSION}</div>
-                    <p className="text-sm text-slate-500">Kiến trúc PWA mô-đun hóa, phân luồng thông báo riêng cho Quản trị viên và Công khai toàn dân.</p>
+                    <p className="text-sm text-slate-500">Giao diện thông minh ưu tiên bảng tin nổi bật, tìm kiếm nhanh toàn thôn và 4 cụm tiện ích đa dụng.</p>
                   </div>
                   <button onClick={() => window.location.reload()} className="bg-slate-100 hover:bg-slate-200 px-4 py-2 rounded-xl text-sm font-medium flex items-center gap-2"><RefreshCw className="w-4 h-4" /> Kiểm tra cập nhật</button>
                 </div>
@@ -2350,20 +2374,69 @@ export default function App() {
     );
   }
 
-  // ==================== PUBLIC RESIDENT VIEW ====================
-  const menuGrid = [
-    { id: 'announcements', label: 'Thông báo', icon: Bell, iconColor: 'text-red-500', bgColor: 'bg-red-50' },
-    { id: 'news', label: 'Tin tức', icon: Newspaper, iconColor: 'text-emerald-600', bgColor: 'bg-emerald-50' },
-    { id: 'events', label: 'Lịch thôn', icon: Calendar, iconColor: 'text-sky-600', bgColor: 'bg-sky-50' },
-    { id: 'finance', label: 'Ủng hộ & Thu chi', icon: HeartHandshake, iconColor: 'text-rose-600', bgColor: 'bg-rose-50' },
-    { id: 'officials', label: 'Cán bộ', icon: Users, iconColor: 'text-indigo-600', bgColor: 'bg-indigo-50' },
-    { id: 'feedback', label: 'Phản ánh', icon: MessageSquare, iconColor: 'text-amber-500', bgColor: 'bg-amber-50' },
-    { id: 'suggest', label: 'Góp ý', icon: Lightbulb, iconColor: 'text-emerald-700', bgColor: 'bg-emerald-100/70' },
-    { id: 'map', label: 'Bản đồ', icon: MapPin, iconColor: 'text-teal-600', bgColor: 'bg-teal-50' },
-    { id: 'contact', label: 'Liên hệ', icon: PhoneCall, iconColor: 'text-blue-600', bgColor: 'bg-blue-50' },
-    { id: 'gallery', label: 'Thư viện ảnh', icon: ImageIcon, iconColor: 'text-purple-600', bgColor: 'bg-purple-50' },
-    { id: 'more', label: 'Mã QR & DS', icon: QrCode, iconColor: 'text-slate-700', bgColor: 'bg-slate-100' },
+  // ==================== SMART PUBLIC RESIDENT VIEW ====================
+  const smartHubs = [
+    {
+      id: 'feed',
+      sub: 'all',
+      label: 'Tin & Lịch',
+      desc: `${announcements.length + news.length} tin • ${events.length} lịch`,
+      icon: Newspaper,
+      iconColor: 'text-emerald-700',
+      bgColor: 'bg-emerald-50',
+    },
+    {
+      id: 'finance',
+      sub: 'donations',
+      label: 'Ủng hộ & Quỹ',
+      desc: `${donationItems.length} lượt • Minh bạch`,
+      icon: HeartHandshake,
+      iconColor: 'text-rose-600',
+      bgColor: 'bg-rose-50',
+    },
+    {
+      id: 'directory',
+      sub: 'officials',
+      label: 'Danh bạ & Bản đồ',
+      desc: `${officials.length} cán bộ • Nhà VH`,
+      icon: Compass,
+      iconColor: 'text-sky-700',
+      bgColor: 'bg-sky-50',
+    },
+    {
+      id: 'voice',
+      sub: 'feedback',
+      label: 'Phản ánh & Góp ý',
+      desc: 'Gửi trực tiếp Ban thôn',
+      icon: MessageSquare,
+      iconColor: 'text-amber-600',
+      bgColor: 'bg-amber-50',
+    },
   ];
+
+  // Kết quả tìm kiếm nhanh toàn bộ dữ liệu trên Trang chủ
+  const qLower = quickSearch.trim().toLowerCase();
+  const matchedAnnouncements = qLower
+    ? announcements.filter((a) => `${a.title} ${a.content}`.toLowerCase().includes(qLower))
+    : [];
+  const matchedNews = qLower
+    ? news.filter((n) => `${n.title} ${n.content} ${n.category}`.toLowerCase().includes(qLower))
+    : [];
+  const matchedOfficials = qLower
+    ? officials.filter((o) => `${o.full_name} ${o.role} ${o.phone}`.toLowerCase().includes(qLower))
+    : [];
+  const matchedEvents = qLower
+    ? events.filter((ev) => `${ev.title} ${ev.location} ${ev.event_date}`.toLowerCase().includes(qLower))
+    : [];
+  const matchedDonations = qLower
+    ? donationItems.filter((d) => `${d.name} ${d.role_or_group} ${d.detail} ${d.in_kind}`.toLowerCase().includes(qLower))
+    : [];
+  const totalQuickMatches =
+    matchedAnnouncements.length + matchedNews.length + matchedOfficials.length + matchedEvents.length + matchedDonations.length;
+
+  // Lịch họp / sự kiện sắp tới gần nhất
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const upcomingEvent = events.find((ev) => (ev.event_date || '') >= todayIso) || events[0] || null;
 
   const filteredDonationsPublic = donationItems.filter((d) =>
     `${d.name} ${d.role_or_group} ${d.detail} ${d.in_kind}`.toLowerCase().includes(searchFinance.toLowerCase())
@@ -2398,11 +2471,21 @@ export default function App() {
         </div>
       )}
 
+      {/* Header gọn gàng: Bấm ngôi nhà về Trang chủ, nút Chuông, Mã QR và Quản trị ngay tầm tay */}
       <header className="bg-gradient-to-br from-emerald-700 via-emerald-600 to-teal-700 text-white rounded-b-3xl shadow-md">
-        <div className="max-w-2xl mx-auto px-4 pt-4 pb-6">
-          <div className="flex justify-between items-center mb-4">
+        <div className="max-w-2xl mx-auto px-4 pt-3.5 pb-5">
+          <div className="flex justify-between items-center mb-3">
             <span className="text-[11px] bg-white/15 backdrop-blur-sm px-3 py-1 rounded-full capitalize font-medium">{todayStr}</span>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={requestNotification}
+                className={`px-2.5 py-1.5 rounded-xl text-[11px] font-bold flex items-center gap-1 transition ${
+                  pushSubscribed ? 'bg-white/20 text-white' : 'bg-amber-400 text-emerald-950 hover:bg-amber-300'
+                }`}
+                title="Bật thông báo chuông"
+              >
+                <Bell className="w-3.5 h-3.5" /> {pushSubscribed ? 'Đã bật chuông' : 'Bật chuông'}
+              </button>
               <button
                 onClick={handleManualRefresh}
                 className="bg-white/15 hover:bg-white/25 p-2 rounded-xl transition"
@@ -2413,600 +2496,889 @@ export default function App() {
               <button onClick={() => setShowQRModal(true)} className="bg-white/15 hover:bg-white/25 p-2 rounded-xl transition" title="Mã QR chia sẻ">
                 <QrCode className="w-4 h-4" />
               </button>
-              <button onClick={() => setMode('admin')} className="bg-white/15 hover:bg-white/25 px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition">
+              <button onClick={() => setMode('admin')} className="bg-white/15 hover:bg-white/25 px-2.5 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1 transition">
                 <Lock className="w-3.5 h-3.5" /> Quản trị
               </button>
             </div>
           </div>
+
           <button
             type="button"
             onClick={goHomePublic}
-            className="flex items-center gap-3.5 text-left group cursor-pointer active:scale-[0.99] transition"
+            className="flex items-center gap-3 text-left group cursor-pointer active:scale-[0.99] transition"
             title="Bấm vào ngôi nhà để quay về Trang chủ"
           >
-            <img src="/icon.svg" alt="Logo Thôn An Sơn" className="w-14 h-14 rounded-2xl shadow-md bg-white/10 p-1 group-hover:bg-white/20 transition" />
+            <img src="/icon.svg" alt="Logo Thôn An Sơn" className="w-12 h-12 rounded-2xl shadow-md bg-white/10 p-1 group-hover:bg-white/20 transition" />
             <div>
-              <h1 className="text-2xl font-extrabold tracking-tight leading-tight">{appSettings.village_name}</h1>
-              <p className="text-xs sm:text-sm text-emerald-100 font-medium mt-0.5">{appSettings.subtitle}</p>
+              <h1 className="text-xl sm:text-2xl font-extrabold tracking-tight leading-tight">{appSettings.village_name}</h1>
+              <p className="text-xs text-emerald-100 font-medium">{appSettings.subtitle}</p>
             </div>
           </button>
+
+          {/* Thanh tìm kiếm thông minh 1 chạm */}
+          <div className="relative mt-3.5">
+            <Search className="w-4 h-4 text-emerald-700 absolute left-3.5 top-3" />
+            <input
+              value={quickSearch}
+              onChange={(e) => setQuickSearch(e.target.value)}
+              placeholder="Tìm nhanh thông báo, lịch họp, số điện thoại cán bộ, người ủng hộ..."
+              className="w-full bg-white text-slate-800 placeholder-slate-400 pl-10 pr-9 py-2.5 rounded-2xl text-xs sm:text-sm shadow-sm outline-none focus:ring-2 focus:ring-emerald-300"
+            />
+            {quickSearch && (
+              <button
+                type="button"
+                onClick={() => setQuickSearch('')}
+                className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
+          </div>
         </div>
       </header>
 
-      <main className="max-w-2xl mx-auto px-4 py-5 space-y-5">
-        {tab === 'home' && (
-          <>
-            <div className="grid grid-cols-3 gap-3 sm:gap-4">
-              {menuGrid.map(item => {
-                const Icon = item.icon;
-                return (
-                  <button
-                    key={item.id}
-                    onClick={() => setTab(item.id)}
-                    className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 hover:border-emerald-200 hover:shadow-md active:scale-[0.98] flex flex-col items-center justify-center gap-2.5 transition"
-                  >
-                    <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${item.bgColor}`}>
-                      <Icon className={`w-6 h-6 ${item.iconColor}`} />
-                    </div>
-                    <span className="text-xs sm:text-sm font-bold text-slate-800 text-center leading-tight">{item.label}</span>
-                  </button>
-                );
-              })}
+      <main className="max-w-2xl mx-auto px-4 py-4 space-y-4">
+        {/* KẾT QUẢ TÌM KIẾM NHANH NẾU ĐANG NHẬP TỪ KHÓA */}
+        {qLower ? (
+          <section className="space-y-3">
+            <div className="flex items-center justify-between px-1">
+              <h2 className="text-xs font-extrabold uppercase tracking-wider text-slate-500">
+                Kết quả tìm kiếm "{quickSearch}" ({totalQuickMatches})
+              </h2>
+              <button onClick={() => setQuickSearch('')} className="text-xs text-emerald-700 font-bold">Đóng tìm kiếm</button>
             </div>
 
-            <section className="space-y-3 pt-1">
-              <div className="flex justify-between items-center px-1">
-                <h2 className="text-xs font-extrabold uppercase tracking-wider text-slate-500">Tin mới nhất</h2>
-                <button onClick={() => setTab('announcements')} className="text-xs text-emerald-700 font-bold flex items-center hover:underline">
-                  Xem tất cả <ChevronRight className="w-4 h-4" />
-                </button>
-              </div>
-
-              {loading ? (
-                <div className="bg-white p-5 rounded-2xl border border-slate-100 text-sm text-slate-500 text-center">Đang tải thông tin thôn...</div>
-              ) : announcements.length === 0 ? (
-                <div className="bg-white p-5 rounded-2xl border border-slate-100 text-center space-y-2">
-                  <p className="text-sm font-semibold text-slate-700">Chào mừng bà con đến với cổng thông tin {appSettings.village_name}</p>
-                  <p className="text-xs text-slate-500">Chưa có thông báo mới. Ban thôn sẽ cập nhật kịp thời tại đây.</p>
-                </div>
-              ) : (
-                announcements.slice(0, 3).map(a => (
-                  <div key={a.id} className="bg-white p-4 rounded-2xl border-l-4 border-l-emerald-600 border border-slate-100 shadow-sm space-y-2">
-                    <div className="flex items-center gap-2">
-                      {a.is_pinned && <span className="text-[11px] bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full font-bold">Ghim</span>}
-                      {a.priority === 'urgent' && <span className="text-[11px] bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-bold">Khẩn cấp</span>}
-                      <span className="text-xs font-bold text-emerald-700">Thông báo thôn</span>
-                      <span className="text-[11px] text-slate-400 ml-auto">{new Date(a.created_at).toLocaleDateString('vi-VN')}</span>
-                    </div>
-                    <h3 className="font-bold text-slate-800 text-base leading-snug">{a.title}</h3>
-                    <p className="text-sm text-slate-600 line-clamp-3 whitespace-pre-line">{a.content}</p>
-                    {a.image_url && (
-                      <a href={a.image_url} target="_blank" rel="noreferrer" className="block pt-1">
-                        <img src={a.image_url} alt={a.title} className="w-full max-h-64 object-contain rounded-xl border border-slate-100 bg-slate-50" />
-                      </a>
-                    )}
-                    <div className="pt-1 flex justify-end">
-                      <button
-                        type="button"
-                        onClick={() => handleCopyPostLink('announcements', a)}
-                        className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 rounded-xl transition"
-                      >
-                        {copiedKey === `announcements-${a.id}` ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                        {copiedKey === `announcements-${a.id}` ? 'Đã sao chép link' : 'Sao chép link gửi Zalo'}
-                      </button>
-                    </div>
-                  </div>
-                ))
-              )}
-            </section>
-
-            <div className="bg-white rounded-2xl p-4 border border-emerald-100 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div>
-                <div className="text-sm font-bold text-slate-800">Nhận tin báo nhanh từ Ban thôn</div>
-                <div className="text-xs text-slate-500">Bật 1 lần để điện thoại rung chuông ngay cả khi tắt ứng dụng</div>
-              </div>
-              <button onClick={requestNotification} className="bg-emerald-700 hover:bg-emerald-800 text-white px-4 py-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shrink-0">
-                <Bell className="w-4 h-4" /> {pushSubscribed ? 'Đã bật thông báo nền' : 'Bật thông báo'}
-              </button>
-            </div>
-          </>
-        )}
-
-        {tab === 'finance' && (
-          <div className="space-y-4">
-            <div>
-              <h2 className="text-xl font-bold text-slate-800">Công khai Ủng hộ & Thu – Chi {appSettings.village_name}</h2>
-              <p className="text-xs text-slate-500 mt-0.5">Ban quản lý thôn cập nhật công khai để toàn thể bà con nhân dân cùng theo dõi, giám sát.</p>
-            </div>
-
-            <div className="grid grid-cols-3 gap-2.5">
-              <div className="bg-white p-3.5 rounded-2xl border border-emerald-100 shadow-sm">
-                <div className="text-[11px] font-bold text-emerald-700">Tổng ủng hộ & Thu</div>
-                <div className="text-sm sm:text-base font-extrabold text-emerald-800 mt-1">{formatVND(totalCombinedThu)}</div>
-              </div>
-              <div className="bg-white p-3.5 rounded-2xl border border-rose-100 shadow-sm">
-                <div className="text-[11px] font-bold text-rose-700">Tổng đã chi</div>
-                <div className="text-sm sm:text-base font-extrabold text-rose-700 mt-1">{formatVND(totalLedgerChi)}</div>
-              </div>
-              <div className="bg-white p-3.5 rounded-2xl border border-sky-100 shadow-sm">
-                <div className="text-[11px] font-bold text-sky-700">Số dư hiện còn</div>
-                <div className="text-sm sm:text-base font-extrabold text-sky-800 mt-1">{formatVND(currentFundBalance)}</div>
-              </div>
-            </div>
-
-            <div className="flex gap-2 bg-white p-1.5 rounded-2xl border border-slate-100 shadow-sm">
-              <button
-                type="button"
-                onClick={() => setFinancePublicSubTab('donations')}
-                className={`flex-1 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition ${financePublicSubTab === 'donations' ? 'bg-emerald-700 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'}`}
-              >
-                Người dân ủng hộ ({donationItems.length})
-              </button>
-              <button
-                type="button"
-                onClick={() => setFinancePublicSubTab('ledger')}
-                className={`flex-1 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition ${financePublicSubTab === 'ledger' ? 'bg-emerald-700 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'}`}
-              >
-                Sổ Thu – Chi ({ledgerItems.length})
-              </button>
-            </div>
-
-            <div className="relative">
-              <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
-              <input
-                placeholder={financePublicSubTab === 'donations' ? 'Tìm tên người ủng hộ, xóm hoặc đợt vận động...' : 'Tìm nội dung khoản thu, chi...'}
-                value={searchFinance}
-                onChange={e => setSearchFinance(e.target.value)}
-                className="w-full bg-white border border-slate-200 pl-10 pr-4 py-2.5 rounded-xl text-sm"
-              />
-            </div>
-
-            {financePublicSubTab === 'donations' && (
-              <div className="space-y-2.5">
-                {filteredDonationsPublic.length === 0 ? (
-                  <div className="bg-white p-6 rounded-2xl border border-slate-100 text-center text-sm text-slate-500">
-                    Chưa có danh sách ủng hộ nào được đăng tải.
-                  </div>
-                ) : (
-                  filteredDonationsPublic.map((d, idx) => (
-                    <div key={d.id} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm flex justify-between items-start gap-3">
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2">
-                          <span className="text-[11px] font-bold bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full">#{idx + 1}</span>
-                          <span className="font-bold text-slate-800">{d.name}</span>
-                          {d.role_or_group && <span className="text-xs text-slate-500">({d.role_or_group})</span>}
-                        </div>
-                        <div className="text-xs text-slate-600">{d.detail}</div>
-                        {d.note && <div className="text-xs text-slate-500 italic">{d.note}</div>}
-                        <div className="text-[11px] text-slate-400">Ngày ghi nhận: {d.date}</div>
-                      </div>
-                      <div className="text-right shrink-0">
-                        {d.amount > 0 && <div className="font-extrabold text-emerald-700 text-sm sm:text-base">{formatVND(d.amount)}</div>}
-                        {d.in_kind && <div className="text-xs font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-lg mt-1">{d.in_kind}</div>}
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-            )}
-
-            {financePublicSubTab === 'ledger' && (
-              <div className="space-y-2.5">
-                {filteredLedgerPublic.length === 0 ? (
-                  <div className="bg-white p-6 rounded-2xl border border-slate-100 text-center text-sm text-slate-500">
-                    Chưa có khoản thu – chi nào được công khai.
-                  </div>
-                ) : (
-                  filteredLedgerPublic.map((l) => (
-                    <div key={l.id} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm flex justify-between items-start gap-3">
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2">
-                          <span className={`text-[11px] font-extrabold px-2.5 py-0.5 rounded-full ${l.entryType === 'chi' ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-800'}`}>
-                            {l.entryType === 'chi' ? 'CHI' : 'THU'}
-                          </span>
-                          <span className="font-bold text-slate-800 text-sm">{l.name}</span>
-                        </div>
-                        <div className="text-xs text-slate-600">{l.detail}</div>
-                        {l.note && <div className="text-xs text-slate-500 italic">{l.note}</div>}
-                        <div className="text-[11px] text-slate-400">Ngày: {l.date}</div>
-                      </div>
-                      <div className={`font-extrabold text-sm sm:text-base shrink-0 ${l.entryType === 'chi' ? 'text-rose-700' : 'text-emerald-700'}`}>
-                        {l.entryType === 'chi' ? '-' : '+'}{formatVND(l.amount)}
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-            )}
-          </div>
-        )}
-
-        {tab === 'announcements' && (
-          <div className="space-y-4">
-            <h2 className="text-xl font-bold text-slate-800">Thông báo {appSettings.village_name}</h2>
-            {announcements.length === 0 && <p className="text-slate-500 text-sm">Chưa có thông báo nào.</p>}
-            {announcements.map(a => {
-              const postKey = `announcements-${a.id}`;
-              const isHighlighted = highlightedPost === postKey;
-              return (
-                <div
-                  key={a.id}
-                  id={`post-${postKey}`}
-                  className={`bg-white p-5 rounded-2xl border shadow-sm space-y-2 transition ${isHighlighted ? 'ring-2 ring-emerald-500 border-emerald-400' : 'border-slate-100'}`}
-                >
-                  <div className="text-xs text-slate-400">{a.is_pinned ? '📌 Đã ghim • ' : ''}{new Date(a.created_at).toLocaleDateString('vi-VN')}</div>
-                  <h3 className="font-bold text-lg text-slate-800">{a.title}</h3>
-                  <p className="text-slate-600 whitespace-pre-line">{a.content}</p>
-                  {a.image_url && (
-                    <a href={a.image_url} target="_blank" rel="noreferrer" className="block pt-1">
-                      <img src={a.image_url} alt={a.title} className="w-full max-h-96 object-contain rounded-xl border border-slate-100 bg-slate-50" />
-                    </a>
-                  )}
-                  <div className="pt-2 flex justify-end">
-                    <button
-                      type="button"
-                      onClick={() => handleCopyPostLink('announcements', a)}
-                      className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-3.5 py-2 rounded-xl transition"
-                    >
-                      {copiedKey === postKey ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-                      {copiedKey === postKey ? 'Đã sao chép link Zalo' : 'Sao chép link gửi Zalo'}
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-
-        {tab === 'news' && (
-          <div className="space-y-4">
-            <h2 className="text-xl font-bold text-slate-800">Tin tức & Hoạt động cộng đồng</h2>
-            {news.length === 0 && <p className="text-slate-500 text-sm">Chưa có bài viết nào.</p>}
-            {news.map(n => {
-              const postKey = `news-${n.id}`;
-              const isHighlighted = highlightedPost === postKey;
-              return (
-                <div
-                  key={n.id}
-                  id={`post-${postKey}`}
-                  className={`bg-white p-5 rounded-2xl border shadow-sm space-y-2 transition ${isHighlighted ? 'ring-2 ring-emerald-500 border-emerald-400' : 'border-slate-100'}`}
-                >
-                  <span className="text-xs bg-emerald-100 text-emerald-800 px-2.5 py-0.5 rounded-full font-medium">{n.category}</span>
-                  <h3 className="font-bold text-lg text-slate-800">{n.title}</h3>
-                  <p className="text-slate-600 whitespace-pre-line">{n.content}</p>
-                  {n.video_url && <a href={n.video_url} target="_blank" rel="noreferrer" className="inline-block text-sm text-sky-700 font-semibold underline">▶ Xem video hoạt động</a>}
-                  <div className="pt-2 flex justify-end">
-                    <button
-                      type="button"
-                      onClick={() => handleCopyPostLink('news', n)}
-                      className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-3.5 py-2 rounded-xl transition"
-                    >
-                      {copiedKey === postKey ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-                      {copiedKey === postKey ? 'Đã sao chép link Zalo' : 'Sao chép link gửi Zalo'}
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-
-        {tab === 'officials' && (
-          <div className="space-y-4">
-            <h2 className="text-xl font-bold text-slate-800">Danh sách Cán bộ, Đoàn thể {appSettings.village_name}</h2>
-            <div className="relative">
-              <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
-              <input placeholder="Tìm theo tên hoặc chức vụ..." value={searchOfficial} onChange={e => setSearchOfficial(e.target.value)} className="w-full bg-white border border-slate-200 pl-10 pr-4 py-2.5 rounded-xl text-sm" />
-            </div>
-            <div className="grid sm:grid-cols-2 gap-3">
-              {officials.filter(o => (o.full_name + o.role).toLowerCase().includes(searchOfficial.toLowerCase())).map(o => (
-                <div key={o.id} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm flex justify-between items-center gap-3">
-                  <div>
-                    <div className="font-bold text-slate-800">{o.full_name}</div>
-                    <div className="text-sm text-emerald-700 font-medium">{o.role}</div>
-                    <div className="text-xs text-slate-500 mt-0.5">{o.phone}</div>
-                  </div>
-                  {o.phone && (
-                    <a href={`tel:${o.phone.replace(/\s+/g, '')}`} className="bg-emerald-600 hover:bg-emerald-700 text-white p-3 rounded-xl shrink-0" title="Gọi điện">
-                      <Phone className="w-5 h-5" />
-                    </a>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {tab === 'events' && (
-          <div className="space-y-4">
-            <h2 className="text-xl font-bold text-slate-800">Lịch sinh hoạt cộng đồng</h2>
-            {events.length === 0 && <p className="text-slate-500 text-sm">Chưa có lịch sinh hoạt sắp tới.</p>}
-            {events.map(ev => {
-              const postKey = `events-${ev.id}`;
-              const isHighlighted = highlightedPost === postKey;
-              return (
-                <div
-                  key={ev.id}
-                  id={`post-${postKey}`}
-                  className={`bg-white p-4 rounded-2xl border shadow-sm flex gap-4 items-center ${isHighlighted ? 'ring-2 ring-emerald-500 border-emerald-400' : 'border-slate-100'}`}
-                >
-                  <div className="bg-emerald-100 text-emerald-800 px-3 py-2 rounded-xl text-center min-w-[76px]">
-                    <div className="text-xs font-semibold">{ev.event_date}</div>
-                    <div className="text-sm font-bold">{ev.event_time}</div>
-                  </div>
-                  <div>
-                    <h3 className="font-bold text-slate-800">{ev.title}</h3>
-                    <div className="text-xs text-slate-500 flex items-center gap-1 mt-1"><MapPin className="w-3.5 h-3.5" /> {ev.location}</div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-
-        {tab === 'feedback' && (
-          <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm space-y-4">
-            <h2 className="text-xl font-bold text-slate-800">Gửi Phản ánh & Kiến nghị</h2>
-            <p className="text-sm text-slate-500">Không cần đăng nhập. Mọi thông tin cá nhân và phản ánh của bà con được bảo mật, chỉ Ban thôn tiếp nhận xử lý.</p>
-            <form onSubmit={handleFeedbackSubmit} className="space-y-3">
-              <div className="grid sm:grid-cols-2 gap-3">
-                <input placeholder="Họ và tên (không bắt buộc)" value={fbForm.sender_name} onChange={e => setFbForm({ ...fbForm, sender_name: e.target.value })} className="border px-4 py-2.5 rounded-xl text-sm" />
-                <input placeholder="Số điện thoại (không bắt buộc)" value={fbForm.sender_phone} onChange={e => setFbForm({ ...fbForm, sender_phone: e.target.value })} className="border px-4 py-2.5 rounded-xl text-sm" />
-              </div>
-              <select value={fbForm.category} onChange={e => setFbForm({ ...fbForm, category: e.target.value })} className="w-full border px-4 py-2.5 rounded-xl text-sm">
-                <option>Đường làng, ngõ xóm</option>
-                <option>Vệ sinh môi trường</option>
-                <option>Điện chiếu sáng</option>
-                <option>An ninh, trật tự</option>
-                <option>Hoạt động cộng đồng</option>
-                <option>Ý kiến kiến nghị khác</option>
-              </select>
-              <textarea required rows={4} placeholder="Nhập nội dung phản ánh hoặc kiến nghị của bà con..." value={fbForm.content} onChange={e => setFbForm({ ...fbForm, content: e.target.value })} className="w-full border px-4 py-2.5 rounded-xl text-sm" />
-              <button className="w-full bg-amber-600 hover:bg-amber-700 text-white font-semibold py-3 rounded-xl">Gửi phản ánh đến Ban thôn</button>
-            </form>
-          </div>
-        )}
-
-        {tab === 'suggest' && (
-          <div className="bg-white p-6 rounded-2xl border border-emerald-200 shadow-sm space-y-4">
-            <div className="flex items-start gap-3">
-              <div className="w-10 h-10 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0">
-                <Lightbulb className="w-5 h-5" />
-              </div>
-              <div>
-                <h2 className="text-xl font-bold text-slate-800">Góp ý xây dựng {appSettings.village_name}</h2>
-                <p className="text-xs sm:text-sm text-slate-600 mt-1">
-                  Đóng góp ý tưởng, hiến kế phát triển kinh tế – văn hóa – cảnh quan thôn quê. Mọi thông tin người góp ý được <strong>bảo mật tuyệt đối</strong>, chỉ <strong>Ban quản trị thôn</strong> nắm thông tin để trao đổi, tiếp thu.
-                </p>
-              </div>
-            </div>
-
-            <form onSubmit={handleSuggestionSubmit} className="space-y-3 pt-1">
-              <div className="grid sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">Họ và tên người góp ý <span className="text-red-600">*</span></label>
-                  <input
-                    required
-                    placeholder="Nhập đầy đủ họ và tên..."
-                    value={sugForm.sender_name}
-                    onChange={e => setSugForm({ ...sugForm, sender_name: e.target.value })}
-                    className="w-full border px-4 py-2.5 rounded-xl text-sm"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">Số điện thoại liên hệ <span className="text-red-600">*</span></label>
-                  <input
-                    required
-                    type="tel"
-                    placeholder="Nhập số điện thoại..."
-                    value={sugForm.sender_phone}
-                    onChange={e => setSugForm({ ...sugForm, sender_phone: e.target.value })}
-                    className="w-full border px-4 py-2.5 rounded-xl text-sm"
-                  />
-                </div>
-              </div>
-
-              <div className="grid sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">Khu vực / Xóm / Hộ gia đình <span className="text-red-600">*</span></label>
-                  <input
-                    required
-                    placeholder="Ví dụ: Xóm 2, thôn An Sơn..."
-                    value={sugForm.area}
-                    onChange={e => setSugForm({ ...sugForm, area: e.target.value })}
-                    className="w-full border px-4 py-2.5 rounded-xl text-sm"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">Lĩnh vực góp ý</label>
-                  <select
-                    value={sugForm.topic}
-                    onChange={e => setSugForm({ ...sugForm, topic: e.target.value })}
-                    className="w-full border px-4 py-2.5 rounded-xl text-sm"
-                  >
-                    <option>Xây dựng đời sống văn hóa, nông thôn mới</option>
-                    <option>Phát triển kinh tế, du lịch vùng Cùa</option>
-                    <option>Hạ tầng, đường giao thông, cảnh quan</option>
-                    <option>Hoạt động đoàn thể, thanh thiếu niên</option>
-                    <option>Chuyển đổi số, cải tiến ứng dụng thôn</option>
-                    <option>Góp ý khác cho Ban quản lý thôn</option>
-                  </select>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">Nội dung góp ý chi tiết <span className="text-red-600">*</span></label>
-                <textarea
-                  required
-                  rows={4}
-                  placeholder="Nhập nội dung góp ý xây dựng thôn An Sơn..."
-                  value={sugForm.content}
-                  onChange={e => setSugForm({ ...sugForm, content: e.target.value })}
-                  className="w-full border px-4 py-2.5 rounded-xl text-sm"
-                />
-              </div>
-
-              <button
-                disabled={submittingSug}
-                className="w-full bg-emerald-700 hover:bg-emerald-800 text-white font-semibold py-3 rounded-xl disabled:opacity-60"
-              >
-                {submittingSug ? 'Đang gửi góp ý...' : 'Gửi góp ý tới Ban quản trị thôn'}
-              </button>
-            </form>
-          </div>
-        )}
-
-        {tab === 'map' && (
-          <div className="space-y-4">
-            <h2 className="text-xl font-bold text-slate-800">Bản đồ & Ghim Nhà văn hóa thôn An Sơn</h2>
-            <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm space-y-3">
-              <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3.5 flex items-start gap-3">
-                <div className="w-9 h-9 rounded-xl bg-emerald-700 text-white flex items-center justify-center shrink-0 mt-0.5">
-                  <MapPin className="w-5 h-5" />
-                </div>
-                <div className="space-y-1 text-sm">
-                  <div className="font-extrabold text-emerald-950 flex flex-wrap items-center gap-2">
-                    <span>📍 Đã ghim: {appSettings.cultural_house_name}</span>
-                    {appSettings.cultural_house_lat && appSettings.cultural_house_lng && (
-                      <span className="text-[11px] font-mono bg-white text-emerald-800 px-2 py-0.5 rounded-full border border-emerald-200">
-                        {appSettings.cultural_house_lat}, {appSettings.cultural_house_lng}
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-xs text-slate-600">{appSettings.cultural_house_note || appSettings.address}</p>
-                </div>
-              </div>
-
-              <div className="overflow-hidden rounded-xl border border-slate-200">
-                <iframe
-                  title={`Bản đồ ${appSettings.cultural_house_name}`}
-                  src={culturalHouseMapSrc}
-                  className="w-full h-72 border-0"
-                  loading="lazy"
-                />
-              </div>
-              <div className="space-y-2 pt-1">
-                <div className="font-bold text-slate-800 flex items-center gap-2"><MapPin className="w-4 h-4 text-emerald-700" /> {appSettings.cultural_house_name}</div>
-                <p className="text-xs text-slate-500">Địa chỉ: {appSettings.address}</p>
-                <a
-                  href={culturalHouseExternalUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex items-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white px-4 py-2.5 rounded-xl text-xs font-bold"
-                >
-                   Mở chỉ đường tới Nhà văn hóa trên Google Maps <ExternalLink className="w-3.5 h-3.5" />
-                </a>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {tab === 'contact' && (
-          <div className="space-y-4">
-            <h2 className="text-xl font-bold text-slate-800">Liên hệ nhanh & Số khẩn cấp</h2>
-            <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-3">
-              <h3 className="font-bold text-emerald-800 text-sm uppercase">Ban quản lý & Tổ ANTT {appSettings.village_name}</h3>
-              {officials.length === 0 ? (
-                <p className="text-sm text-slate-500">Xem danh bạ chi tiết trong mục Cán bộ.</p>
-              ) : (
-                <div className="divide-y">
-                  {officials.map(o => (
-                    <div key={o.id} className="py-2.5 flex justify-between items-center">
-                      <div>
-                        <div className="font-bold text-slate-800 text-sm">{o.full_name}</div>
-                        <div className="text-xs text-slate-500">{o.role}</div>
-                      </div>
-                      {o.phone && (
-                        <a href={`tel:${o.phone.replace(/\s+/g, '')}`} className="bg-emerald-50 text-emerald-700 hover:bg-emerald-100 px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5">
-                          <Phone className="w-3.5 h-3.5" /> {o.phone}
-                        </a>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-3">
-              <h3 className="font-bold text-red-700 text-sm uppercase">Đường dây nóng khẩn cấp toàn quốc</h3>
-              <div className="grid grid-cols-3 gap-2.5 text-center">
-                {[
-                  { label: 'Công an', num: '113' },
-                  { label: 'Cứu hỏa', num: '114' },
-                  { label: 'Cấp cứu', num: '115' },
-                ].map(em => (
-                  <a key={em.num} href={`tel:${em.num}`} className="bg-red-50 hover:bg-red-100 border border-red-100 p-3 rounded-xl">
-                    <div className="text-lg font-extrabold text-red-600">{em.num}</div>
-                    <div className="text-xs font-semibold text-slate-700">{em.label}</div>
-                  </a>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {tab === 'gallery' && (
-          <div className="space-y-4">
-            <h2 className="text-xl font-bold text-slate-800">Thư viện ảnh hoạt động {appSettings.village_name}</h2>
-            {galleryItems.length === 0 ? (
+            {totalQuickMatches === 0 ? (
               <div className="bg-white p-6 rounded-2xl border border-slate-100 text-center text-sm text-slate-500">
-                Chưa có hình ảnh nào được đăng tải. Hình ảnh đính kèm trong các thông báo của thôn sẽ tự động hiển thị tại đây.
+                Không tìm thấy nội dung phù hợp với "{quickSearch}".
               </div>
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {galleryItems.map(item => (
-                  <a key={item.id} href={item.image_url} target="_blank" rel="noreferrer" className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden group">
-                    <img src={item.image_url} alt={item.title} className="w-full h-52 object-cover group-hover:scale-[1.02] transition" />
-                    <div className="p-3">
-                      <div className="font-bold text-sm text-slate-800 line-clamp-1">{item.title}</div>
-                      <div className="text-[11px] text-slate-400 mt-0.5">{new Date(item.created_at).toLocaleDateString('vi-VN')}</div>
+              <div className="space-y-2.5">
+                {matchedAnnouncements.map((a) => (
+                  <button
+                    key={`qa-${a.id}`}
+                    type="button"
+                    onClick={() => openPostFromKey(`announcements-${a.id}`)}
+                    className="w-full bg-white p-4 rounded-2xl border-l-4 border-l-emerald-600 border border-slate-100 text-left shadow-sm space-y-1"
+                  >
+                    <div className="text-[11px] font-bold text-emerald-700">THÔNG BÁO • {new Date(a.created_at).toLocaleDateString('vi-VN')}</div>
+                    <div className="font-bold text-slate-800 text-sm">{a.title}</div>
+                    <div className="text-xs text-slate-500 line-clamp-2">{a.content}</div>
+                  </button>
+                ))}
+                {matchedNews.map((n) => (
+                  <button
+                    key={`qn-${n.id}`}
+                    type="button"
+                    onClick={() => openPostFromKey(`news-${n.id}`)}
+                    className="w-full bg-white p-4 rounded-2xl border-l-4 border-l-teal-600 border border-slate-100 text-left shadow-sm space-y-1"
+                  >
+                    <div className="text-[11px] font-bold text-teal-700">TIN TỨC • {n.category}</div>
+                    <div className="font-bold text-slate-800 text-sm">{n.title}</div>
+                    <div className="text-xs text-slate-500 line-clamp-2">{n.content}</div>
+                  </button>
+                ))}
+                {matchedEvents.map((ev) => (
+                  <button
+                    key={`qe-${ev.id}`}
+                    type="button"
+                    onClick={() => openPostFromKey(`events-${ev.id}`)}
+                    className="w-full bg-white p-4 rounded-2xl border-l-4 border-l-sky-600 border border-slate-100 text-left shadow-sm flex justify-between items-center"
+                  >
+                    <div>
+                      <div className="text-[11px] font-bold text-sky-700">LỊCH THÔN • {ev.event_date} ({ev.event_time})</div>
+                      <div className="font-bold text-slate-800 text-sm">{ev.title}</div>
+                      <div className="text-xs text-slate-500">{ev.location}</div>
                     </div>
-                  </a>
+                    <ChevronRight className="w-4 h-4 text-slate-400" />
+                  </button>
+                ))}
+                {matchedOfficials.map((o) => (
+                  <div key={`qo-${o.id}`} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm flex justify-between items-center">
+                    <div>
+                      <div className="text-[11px] font-bold text-indigo-700">CÁN BỘ THÔN</div>
+                      <div className="font-bold text-slate-800 text-sm">{o.full_name} – {o.role}</div>
+                      <div className="text-xs text-slate-500">{o.phone}</div>
+                    </div>
+                    {o.phone && (
+                      <a href={`tel:${o.phone.replace(/\s+/g, '')}`} className="bg-emerald-600 text-white p-2.5 rounded-xl">
+                        <Phone className="w-4 h-4" />
+                      </a>
+                    )}
+                  </div>
+                ))}
+                {matchedDonations.map((d) => (
+                  <button
+                    key={`qd-${d.id}`}
+                    type="button"
+                    onClick={() => navigatePublic('finance', 'donations')}
+                    className="w-full bg-white p-4 rounded-2xl border border-slate-100 text-left shadow-sm flex justify-between items-center"
+                  >
+                    <div>
+                      <div className="text-[11px] font-bold text-rose-600">ỦNG HỘ THÔN • {d.role_or_group || 'Nhân dân'}</div>
+                      <div className="font-bold text-slate-800 text-sm">{d.name}</div>
+                      <div className="text-xs text-slate-500">{d.detail}</div>
+                    </div>
+                    <div className="font-extrabold text-emerald-700 text-sm">{d.amount > 0 ? formatVND(d.amount) : d.in_kind}</div>
+                  </button>
                 ))}
               </div>
             )}
-          </div>
-        )}
-
-        {tab === 'more' && (
-          <div className="space-y-5">
-            <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm text-center space-y-3">
-              <h3 className="font-bold text-lg text-slate-800">Mã QR truy cập nhanh</h3>
-              <QRImage url={siteUrl} size={200} />
-              <p className="text-xs text-slate-500">Đưa mã này cho bà con quét bằng Zalo hoặc Camera điện thoại để mở ngay ứng dụng {appSettings.village_name}.</p>
-            </div>
-
-            <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm">
-              <h3 className="font-bold text-lg text-slate-800 mb-2">Danh sách công khai của thôn</h3>
-              {regularCustomLists.filter(l => l.is_public).length === 0 ? (
-                <p className="text-sm text-slate-500">Chưa có danh sách công khai nào được đăng tải.</p>
-              ) : regularCustomLists.filter(l => l.is_public).map(l => (
-                <div key={l.id} className="border-t pt-3 mt-3 first:border-0 first:pt-0">
-                  <div className="font-bold text-emerald-800">{l.title}</div>
-                  <ul className="mt-2 space-y-1 text-sm text-slate-600">
-                    {customItems.filter(i => i.list_id === l.id).map(i => (
-                      <li key={i.id}>• <strong>{i.name}</strong> {i.role_or_group && `(${i.role_or_group})`} {i.detail && `– ${i.detail}`}</li>
-                    ))}
-                  </ul>
+          </section>
+        ) : (
+          <>
+            {/* ==================== 1. TRANG CHỦ: ƯU TIÊN TIN TỨC & THÔNG BÁO NỔI BẬT ==================== */}
+            {tab === 'home' && (
+              <>
+                {/* 4 cụm tiện ích thông minh gọn gàng trên 1 hàng */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                  {smartHubs.map((hub) => {
+                    const Icon = hub.icon;
+                    return (
+                      <button
+                        key={hub.id}
+                        type="button"
+                        onClick={() => navigatePublic(hub.id, hub.sub)}
+                        className="bg-white rounded-2xl p-3 border border-slate-100 hover:border-emerald-300 shadow-sm active:scale-[0.98] flex items-center sm:flex-col sm:items-start gap-2.5 text-left transition"
+                      >
+                        <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${hub.bgColor}`}>
+                          <Icon className={`w-5 h-5 ${hub.iconColor}`} />
+                        </div>
+                        <div className="min-w-0">
+                          <div className="text-xs sm:text-sm font-extrabold text-slate-800 truncate">{hub.label}</div>
+                          <div className="text-[11px] text-slate-500 truncate">{hub.desc}</div>
+                        </div>
+                      </button>
+                    );
+                  })}
                 </div>
-              ))}
-            </div>
-          </div>
+
+                {/* Dải tóm tắt nhanh: Lịch họp sắp tới + Quỹ công khai hiện có */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => navigatePublic('feed', 'events')}
+                    className="bg-sky-50/90 hover:bg-sky-100/70 border border-sky-200 rounded-2xl p-3.5 text-left flex items-center justify-between gap-3 transition"
+                  >
+                    <div className="min-w-0">
+                      <div className="text-[11px] font-extrabold uppercase text-sky-800 flex items-center gap-1">
+                        <Calendar className="w-3.5 h-3.5" /> Lịch thôn sắp tới
+                      </div>
+                      {upcomingEvent ? (
+                        <>
+                          <div className="font-bold text-slate-800 text-xs sm:text-sm truncate mt-0.5">{upcomingEvent.title}</div>
+                          <div className="text-[11px] text-slate-600 truncate">{upcomingEvent.event_date} • {upcomingEvent.event_time} • {upcomingEvent.location}</div>
+                        </>
+                      ) : (
+                        <div className="text-xs text-slate-600 mt-0.5">Xem lịch sinh hoạt & bản đồ Nhà văn hóa</div>
+                      )}
+                    </div>
+                    <ChevronRight className="w-4 h-4 text-sky-700 shrink-0" />
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => navigatePublic('finance', 'donations')}
+                    className="bg-rose-50/80 hover:bg-rose-100/60 border border-rose-200 rounded-2xl p-3.5 text-left flex items-center justify-between gap-3 transition"
+                  >
+                    <div className="min-w-0">
+                      <div className="text-[11px] font-extrabold uppercase text-rose-700 flex items-center gap-1">
+                        <Wallet className="w-3.5 h-3.5" /> Quỹ ủng hộ & Thu chi
+                      </div>
+                      <div className="font-extrabold text-emerald-800 text-sm sm:text-base mt-0.5">
+                        Còn quỹ: {formatVND(currentFundBalance)}
+                      </div>
+                      <div className="text-[11px] text-slate-600 truncate">
+                        {donationItems.length} lượt ủng hộ • Tổng thu {formatVND(totalCombinedThu)}
+                      </div>
+                    </div>
+                    <ChevronRight className="w-4 h-4 text-rose-700 shrink-0" />
+                  </button>
+                </div>
+
+                {/* BẢNG TIN TỨC & THÔNG BÁO NỔI BẬT NGAY TRÊN TRANG CHỦ */}
+                <section className="space-y-3">
+                  <div className="flex justify-between items-center px-1">
+                    <h2 className="text-xs font-extrabold uppercase tracking-wider text-emerald-800 flex items-center gap-1.5">
+                      <Sparkles className="w-4 h-4 text-amber-500" /> Thông báo & Tin tức nổi bật
+                    </h2>
+                    <button
+                      onClick={() => navigatePublic('feed', 'all')}
+                      className="text-xs text-emerald-700 font-bold flex items-center hover:underline"
+                    >
+                      Xem tất cả ({announcements.length + news.length}) <ChevronRight className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  {loading ? (
+                    <div className="bg-white p-5 rounded-2xl border border-slate-100 text-sm text-slate-500 text-center">Đang tải thông tin thôn...</div>
+                  ) : announcements.length === 0 && news.length === 0 ? (
+                    <div className="bg-white p-5 rounded-2xl border border-slate-100 text-center space-y-2">
+                      <p className="text-sm font-semibold text-slate-700">Chào mừng bà con đến với cổng thông tin {appSettings.village_name}</p>
+                      <p className="text-xs text-slate-500">Chưa có thông báo mới. Ban thôn sẽ cập nhật kịp thời tại đây.</p>
+                    </div>
+                  ) : (
+                    <>
+                      {announcements.slice(0, 4).map((a) => (
+                        <div key={a.id} className="bg-white p-4 rounded-2xl border-l-4 border-l-emerald-600 border border-slate-100 shadow-sm space-y-2">
+                          <div className="flex items-center gap-2">
+                            {a.is_pinned && <span className="text-[11px] bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full font-bold">📌 Ghim</span>}
+                            {a.priority === 'urgent' && <span className="text-[11px] bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-bold">Khẩn cấp</span>}
+                            <span className="text-xs font-bold text-emerald-700">Thông báo thôn</span>
+                            <span className="text-[11px] text-slate-400 ml-auto">{new Date(a.created_at).toLocaleDateString('vi-VN')}</span>
+                          </div>
+                          <h3
+                            onClick={() => openPostFromKey(`announcements-${a.id}`)}
+                            className="font-bold text-slate-800 text-base leading-snug cursor-pointer hover:text-emerald-700"
+                          >
+                            {a.title}
+                          </h3>
+                          <p className="text-sm text-slate-600 line-clamp-3 whitespace-pre-line">{a.content}</p>
+                          {a.image_url && (
+                            <a href={a.image_url} target="_blank" rel="noreferrer" className="block pt-1">
+                              <img src={a.image_url} alt={a.title} className="w-full max-h-64 object-contain rounded-xl border border-slate-100 bg-slate-50" />
+                            </a>
+                          )}
+                          <div className="pt-1 flex items-center justify-between gap-2">
+                            <button
+                              type="button"
+                              onClick={() => openPostFromKey(`announcements-${a.id}`)}
+                              className="text-xs font-bold text-slate-500 hover:text-emerald-700"
+                            >
+                              Đọc chi tiết →
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleCopyPostLink('announcements', a)}
+                              className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 rounded-xl transition"
+                            >
+                              {copiedKey === `announcements-${a.id}` ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                              {copiedKey === `announcements-${a.id}` ? 'Đã sao chép' : 'Gửi Zalo'}
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+
+                      {news.slice(0, 2).map((n) => (
+                        <div key={n.id} className="bg-white p-4 rounded-2xl border-l-4 border-l-teal-500 border border-slate-100 shadow-sm space-y-2">
+                          <div className="flex items-center gap-2">
+                            <span className="text-[11px] bg-teal-50 text-teal-800 px-2.5 py-0.5 rounded-full font-bold">{n.category}</span>
+                            <span className="text-[11px] text-slate-400 ml-auto">{new Date(n.created_at).toLocaleDateString('vi-VN')}</span>
+                          </div>
+                          <h3
+                            onClick={() => openPostFromKey(`news-${n.id}`)}
+                            className="font-bold text-slate-800 text-base leading-snug cursor-pointer hover:text-emerald-700"
+                          >
+                            {n.title}
+                          </h3>
+                          <p className="text-sm text-slate-600 line-clamp-2 whitespace-pre-line">{n.content}</p>
+                          <div className="pt-1 flex items-center justify-between gap-2">
+                            <button
+                              type="button"
+                              onClick={() => openPostFromKey(`news-${n.id}`)}
+                              className="text-xs font-bold text-slate-500 hover:text-emerald-700"
+                            >
+                              Xem bài viết →
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleCopyPostLink('news', n)}
+                              className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 rounded-xl transition"
+                            >
+                              {copiedKey === `news-${n.id}` ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                              {copiedKey === `news-${n.id}` ? 'Đã sao chép' : 'Gửi Zalo'}
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </>
+                  )}
+                </section>
+              </>
+            )}
+
+            {/* ==================== 2. KHÔNG GIAN GỘP: TIN TỨC, THÔNG BÁO, LỊCH THÔN & THƯ VIỆN ẢNH ==================== */}
+            {tab === 'feed' && (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <h2 className="text-xl font-bold text-slate-800">Bảng tin & Lịch {appSettings.village_name}</h2>
+                </div>
+
+                <div className="flex gap-1.5 overflow-x-auto bg-white p-1.5 rounded-2xl border border-slate-100 shadow-sm">
+                  {[
+                    { id: 'all', label: `Tất cả (${announcements.length + news.length})` },
+                    { id: 'announcements', label: `Thông báo (${announcements.length})` },
+                    { id: 'news', label: `Tin tức (${news.length})` },
+                    { id: 'events', label: `Lịch thôn (${events.length})` },
+                    { id: 'gallery', label: `Ảnh (${galleryItems.length})` },
+                  ].map((f) => (
+                    <button
+                      key={f.id}
+                      type="button"
+                      onClick={() => setFeedSubTab(f.id)}
+                      className={`px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition ${
+                        feedSubTab === f.id ? 'bg-emerald-700 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'
+                      }`}
+                    >
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
+
+                {(feedSubTab === 'all' || feedSubTab === 'announcements') && (
+                  <div className="space-y-3">
+                    {announcements.length === 0 && feedSubTab === 'announcements' && (
+                      <p className="text-slate-500 text-sm">Chưa có thông báo nào.</p>
+                    )}
+                    {announcements.map((a) => {
+                      const postKey = `announcements-${a.id}`;
+                      const isHighlighted = highlightedPost === postKey;
+                      return (
+                        <div
+                          key={a.id}
+                          id={`post-${postKey}`}
+                          className={`bg-white p-5 rounded-2xl border shadow-sm space-y-2 transition ${
+                            isHighlighted ? 'ring-2 ring-emerald-500 border-emerald-400' : 'border-slate-100'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2 text-xs text-slate-400">
+                            <span className="font-bold text-emerald-700">Thông báo</span>
+                            <span>• {a.is_pinned ? '📌 Đã ghim • ' : ''}{new Date(a.created_at).toLocaleDateString('vi-VN')}</span>
+                          </div>
+                          <h3 className="font-bold text-lg text-slate-800">{a.title}</h3>
+                          <p className="text-slate-600 whitespace-pre-line text-sm">{a.content}</p>
+                          {a.image_url && (
+                            <a href={a.image_url} target="_blank" rel="noreferrer" className="block pt-1">
+                              <img src={a.image_url} alt={a.title} className="w-full max-h-96 object-contain rounded-xl border border-slate-100 bg-slate-50" />
+                            </a>
+                          )}
+                          <div className="pt-2 flex justify-end">
+                            <button
+                              type="button"
+                              onClick={() => handleCopyPostLink('announcements', a)}
+                              className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-3.5 py-2 rounded-xl transition"
+                            >
+                              {copiedKey === postKey ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                              {copiedKey === postKey ? 'Đã sao chép link Zalo' : 'Sao chép link gửi Zalo'}
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {(feedSubTab === 'all' || feedSubTab === 'news') && (
+                  <div className="space-y-3">
+                    {news.length === 0 && feedSubTab === 'news' && (
+                      <p className="text-slate-500 text-sm">Chưa có bài viết nào.</p>
+                    )}
+                    {news.map((n) => {
+                      const postKey = `news-${n.id}`;
+                      const isHighlighted = highlightedPost === postKey;
+                      return (
+                        <div
+                          key={n.id}
+                          id={`post-${postKey}`}
+                          className={`bg-white p-5 rounded-2xl border shadow-sm space-y-2 transition ${
+                            isHighlighted ? 'ring-2 ring-emerald-500 border-emerald-400' : 'border-slate-100'
+                          }`}
+                        >
+                          <span className="text-xs bg-teal-100 text-teal-800 px-2.5 py-0.5 rounded-full font-medium">{n.category}</span>
+                          <h3 className="font-bold text-lg text-slate-800">{n.title}</h3>
+                          <p className="text-slate-600 whitespace-pre-line text-sm">{n.content}</p>
+                          {n.video_url && (
+                            <a href={n.video_url} target="_blank" rel="noreferrer" className="inline-block text-sm text-sky-700 font-semibold underline">
+                              ▶ Xem video hoạt động
+                            </a>
+                          )}
+                          <div className="pt-2 flex justify-end">
+                            <button
+                              type="button"
+                              onClick={() => handleCopyPostLink('news', n)}
+                              className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-3.5 py-2 rounded-xl transition"
+                            >
+                              {copiedKey === postKey ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                              {copiedKey === postKey ? 'Đã sao chép link Zalo' : 'Sao chép link gửi Zalo'}
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {feedSubTab === 'events' && (
+                  <div className="space-y-3">
+                    {events.length === 0 && <p className="text-slate-500 text-sm">Chưa có lịch sinh hoạt sắp tới.</p>}
+                    {events.map((ev) => {
+                      const postKey = `events-${ev.id}`;
+                      const isHighlighted = highlightedPost === postKey;
+                      return (
+                        <div
+                          key={ev.id}
+                          id={`post-${postKey}`}
+                          className={`bg-white p-4 rounded-2xl border shadow-sm flex gap-4 items-center ${
+                            isHighlighted ? 'ring-2 ring-emerald-500 border-emerald-400' : 'border-slate-100'
+                          }`}
+                        >
+                          <div className="bg-emerald-100 text-emerald-800 px-3 py-2 rounded-xl text-center min-w-[76px]">
+                            <div className="text-xs font-semibold">{ev.event_date}</div>
+                            <div className="text-sm font-bold">{ev.event_time}</div>
+                          </div>
+                          <div className="flex-1">
+                            <h3 className="font-bold text-slate-800">{ev.title}</h3>
+                            <div className="text-xs text-slate-500 flex items-center gap-1 mt-1">
+                              <MapPin className="w-3.5 h-3.5" /> {ev.location}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => navigatePublic('directory', 'map')}
+                            className="text-xs font-bold text-emerald-700 bg-emerald-50 px-3 py-2 rounded-xl shrink-0"
+                          >
+                            Bản đồ
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {feedSubTab === 'gallery' && (
+                  <div>
+                    {galleryItems.length === 0 ? (
+                      <div className="bg-white p-6 rounded-2xl border border-slate-100 text-center text-sm text-slate-500">
+                        Chưa có hình ảnh nào được đăng tải. Hình ảnh đính kèm trong các thông báo của thôn sẽ tự động hiển thị tại đây.
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        {galleryItems.map((item) => (
+                          <a key={item.id} href={item.image_url} target="_blank" rel="noreferrer" className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden group">
+                            <img src={item.image_url} alt={item.title} className="w-full h-52 object-cover group-hover:scale-[1.02] transition" />
+                            <div className="p-3">
+                              <div className="font-bold text-sm text-slate-800 line-clamp-1">{item.title}</div>
+                              <div className="text-[11px] text-slate-400 mt-0.5">{new Date(item.created_at).toLocaleDateString('vi-VN')}</div>
+                            </div>
+                          </a>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ==================== 3. ỦNG HỘ, THU – CHI & DANH SÁCH CÔNG KHAI ==================== */}
+            {tab === 'finance' && (
+              <div className="space-y-4">
+                <div>
+                  <h2 className="text-xl font-bold text-slate-800">Công khai Ủng hộ, Quỹ & Danh sách thôn</h2>
+                  <p className="text-xs text-slate-500 mt-0.5">Ban quản lý thôn cập nhật công khai để toàn thể bà con nhân dân cùng theo dõi, giám sát.</p>
+                </div>
+
+                <div className="grid grid-cols-3 gap-2.5">
+                  <div className="bg-white p-3.5 rounded-2xl border border-emerald-100 shadow-sm">
+                    <div className="text-[11px] font-bold text-emerald-700">Tổng ủng hộ & Thu</div>
+                    <div className="text-sm sm:text-base font-extrabold text-emerald-800 mt-1">{formatVND(totalCombinedThu)}</div>
+                  </div>
+                  <div className="bg-white p-3.5 rounded-2xl border border-rose-100 shadow-sm">
+                    <div className="text-[11px] font-bold text-rose-700">Tổng đã chi</div>
+                    <div className="text-sm sm:text-base font-extrabold text-rose-700 mt-1">{formatVND(totalLedgerChi)}</div>
+                  </div>
+                  <div className="bg-white p-3.5 rounded-2xl border border-sky-100 shadow-sm">
+                    <div className="text-[11px] font-bold text-sky-700">Số dư hiện còn</div>
+                    <div className="text-sm sm:text-base font-extrabold text-sky-800 mt-1">{formatVND(currentFundBalance)}</div>
+                  </div>
+                </div>
+
+                <div className="flex gap-1.5 bg-white p-1.5 rounded-2xl border border-slate-100 shadow-sm">
+                  <button
+                    type="button"
+                    onClick={() => setFinancePublicSubTab('donations')}
+                    className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition ${financePublicSubTab === 'donations' ? 'bg-emerald-700 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'}`}
+                  >
+                    Ủng hộ ({donationItems.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFinancePublicSubTab('ledger')}
+                    className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition ${financePublicSubTab === 'ledger' ? 'bg-emerald-700 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'}`}
+                  >
+                    Thu – Chi ({ledgerItems.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFinancePublicSubTab('lists')}
+                    className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition ${financePublicSubTab === 'lists' ? 'bg-emerald-700 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'}`}
+                  >
+                    DS Thôn ({regularCustomLists.filter((l) => l.is_public).length})
+                  </button>
+                </div>
+
+                {financePublicSubTab !== 'lists' && (
+                  <div className="relative">
+                    <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
+                    <input
+                      placeholder={financePublicSubTab === 'donations' ? 'Tìm tên người ủng hộ, xóm hoặc đợt vận động...' : 'Tìm nội dung khoản thu, chi...'}
+                      value={searchFinance}
+                      onChange={e => setSearchFinance(e.target.value)}
+                      className="w-full bg-white border border-slate-200 pl-10 pr-4 py-2.5 rounded-xl text-sm"
+                    />
+                  </div>
+                )}
+
+                {financePublicSubTab === 'donations' && (
+                  <div className="space-y-2.5">
+                    {filteredDonationsPublic.length === 0 ? (
+                      <div className="bg-white p-6 rounded-2xl border border-slate-100 text-center text-sm text-slate-500">
+                        Chưa có danh sách ủng hộ nào được đăng tải.
+                      </div>
+                    ) : (
+                      filteredDonationsPublic.map((d, idx) => (
+                        <div key={d.id} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm flex justify-between items-start gap-3">
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2">
+                              <span className="text-[11px] font-bold bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full">#{idx + 1}</span>
+                              <span className="font-bold text-slate-800">{d.name}</span>
+                              {d.role_or_group && <span className="text-xs text-slate-500">({d.role_or_group})</span>}
+                            </div>
+                            <div className="text-xs text-slate-600">{d.detail}</div>
+                            {d.note && <div className="text-xs text-slate-500 italic">{d.note}</div>}
+                            <div className="text-[11px] text-slate-400">Ngày ghi nhận: {d.date}</div>
+                          </div>
+                          <div className="text-right shrink-0">
+                            {d.amount > 0 && <div className="font-extrabold text-emerald-700 text-sm sm:text-base">{formatVND(d.amount)}</div>}
+                            {d.in_kind && <div className="text-xs font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-lg mt-1">{d.in_kind}</div>}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+
+                {financePublicSubTab === 'ledger' && (
+                  <div className="space-y-2.5">
+                    {filteredLedgerPublic.length === 0 ? (
+                      <div className="bg-white p-6 rounded-2xl border border-slate-100 text-center text-sm text-slate-500">
+                        Chưa có khoản thu – chi nào được công khai.
+                      </div>
+                    ) : (
+                      filteredLedgerPublic.map((l) => (
+                        <div key={l.id} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm flex justify-between items-start gap-3">
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2">
+                              <span className={`text-[11px] font-extrabold px-2.5 py-0.5 rounded-full ${l.entryType === 'chi' ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-800'}`}>
+                                {l.entryType === 'chi' ? 'CHI' : 'THU'}
+                              </span>
+                              <span className="font-bold text-slate-800 text-sm">{l.name}</span>
+                            </div>
+                            <div className="text-xs text-slate-600">{l.detail}</div>
+                            {l.note && <div className="text-xs text-slate-500 italic">{l.note}</div>}
+                            <div className="text-[11px] text-slate-400">Ngày: {l.date}</div>
+                          </div>
+                          <div className={`font-extrabold text-sm sm:text-base shrink-0 ${l.entryType === 'chi' ? 'text-rose-700' : 'text-emerald-700'}`}>
+                            {l.entryType === 'chi' ? '-' : '+'}{formatVND(l.amount)}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+
+                {financePublicSubTab === 'lists' && (
+                  <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-4">
+                    {regularCustomLists.filter((l) => l.is_public).length === 0 ? (
+                      <p className="text-sm text-slate-500 text-center">Chưa có danh sách chuyên đề công khai nào được đăng tải.</p>
+                    ) : (
+                      regularCustomLists.filter((l) => l.is_public).map((l) => (
+                        <div key={l.id} className="border-t pt-3 mt-3 first:border-0 first:pt-0 first:mt-0">
+                          <div className="font-bold text-emerald-800">{l.title}</div>
+                          {l.description && <p className="text-xs text-slate-500 mt-0.5">{l.description}</p>}
+                          <ul className="mt-2 space-y-1.5 text-sm text-slate-600">
+                            {customItems.filter((i) => i.list_id === l.id).map((i) => (
+                              <li key={i.id}>• <strong>{i.name}</strong> {i.role_or_group && `(${i.role_or_group})`} {i.detail && `– ${i.detail}`}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ==================== 4. DANH BẠ CÁN BỘ, KHẨN CẤP, BẢN ĐỒ NHÀ VĂN HÓA & MÃ QR ==================== */}
+            {tab === 'directory' && (
+              <div className="space-y-4">
+                <h2 className="text-xl font-bold text-slate-800">Danh bạ, Bản đồ & Mã QR {appSettings.village_name}</h2>
+
+                <div className="flex gap-1.5 bg-white p-1.5 rounded-2xl border border-slate-100 shadow-sm">
+                  {[
+                    { id: 'officials', label: `Cán bộ & Khẩn cấp (${officials.length})` },
+                    { id: 'map', label: 'Bản đồ Nhà VH' },
+                    { id: 'qr', label: 'Mã QR chia sẻ' },
+                  ].map((d) => (
+                    <button
+                      key={d.id}
+                      type="button"
+                      onClick={() => setDirectorySubTab(d.id)}
+                      className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition ${
+                        directorySubTab === d.id ? 'bg-emerald-700 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'
+                      }`}
+                    >
+                      {d.label}
+                    </button>
+                  ))}
+                </div>
+
+                {directorySubTab === 'officials' && (
+                  <div className="space-y-4">
+                    <div className="relative">
+                      <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
+                      <input placeholder="Tìm theo tên hoặc chức vụ..." value={searchOfficial} onChange={e => setSearchOfficial(e.target.value)} className="w-full bg-white border border-slate-200 pl-10 pr-4 py-2.5 rounded-xl text-sm" />
+                    </div>
+                    <div className="grid sm:grid-cols-2 gap-3">
+                      {officials.filter(o => (o.full_name + o.role).toLowerCase().includes(searchOfficial.toLowerCase())).map(o => (
+                        <div key={o.id} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm flex justify-between items-center gap-3">
+                          <div>
+                            <div className="font-bold text-slate-800">{o.full_name}</div>
+                            <div className="text-sm text-emerald-700 font-medium">{o.role}</div>
+                            <div className="text-xs text-slate-500 mt-0.5">{o.phone}</div>
+                          </div>
+                          {o.phone && (
+                            <a href={`tel:${o.phone.replace(/\s+/g, '')}`} className="bg-emerald-600 hover:bg-emerald-700 text-white p-3 rounded-xl shrink-0" title="Gọi điện">
+                              <Phone className="w-5 h-5" />
+                            </a>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-3">
+                      <h3 className="font-bold text-red-700 text-sm uppercase">Đường dây nóng khẩn cấp toàn quốc</h3>
+                      <div className="grid grid-cols-3 gap-2.5 text-center">
+                        {[
+                          { label: 'Công an', num: '113' },
+                          { label: 'Cứu hỏa', num: '114' },
+                          { label: 'Cấp cứu', num: '115' },
+                        ].map(em => (
+                          <a key={em.num} href={`tel:${em.num}`} className="bg-red-50 hover:bg-red-100 border border-red-100 p-3 rounded-xl">
+                            <div className="text-lg font-extrabold text-red-600">{em.num}</div>
+                            <div className="text-xs font-semibold text-slate-700">{em.label}</div>
+                          </a>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {directorySubTab === 'map' && (
+                  <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm space-y-3">
+                    <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3.5 flex items-start gap-3">
+                      <div className="w-9 h-9 rounded-xl bg-emerald-700 text-white flex items-center justify-center shrink-0 mt-0.5">
+                        <MapPin className="w-5 h-5" />
+                      </div>
+                      <div className="space-y-1 text-sm">
+                        <div className="font-extrabold text-emerald-950 flex flex-wrap items-center gap-2">
+                          <span>📍 Đã ghim: {appSettings.cultural_house_name}</span>
+                          {appSettings.cultural_house_lat && appSettings.cultural_house_lng && (
+                            <span className="text-[11px] font-mono bg-white text-emerald-800 px-2 py-0.5 rounded-full border border-emerald-200">
+                              {appSettings.cultural_house_lat}, {appSettings.cultural_house_lng}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-slate-600">{appSettings.cultural_house_note || appSettings.address}</p>
+                      </div>
+                    </div>
+
+                    <div className="overflow-hidden rounded-xl border border-slate-200">
+                      <iframe
+                        title={`Bản đồ ${appSettings.cultural_house_name}`}
+                        src={culturalHouseMapSrc}
+                        className="w-full h-72 border-0"
+                        loading="lazy"
+                      />
+                    </div>
+                    <div className="space-y-2 pt-1">
+                      <div className="font-bold text-slate-800 flex items-center gap-2"><MapPin className="w-4 h-4 text-emerald-700" /> {appSettings.cultural_house_name}</div>
+                      <p className="text-xs text-slate-500">Địa chỉ: {appSettings.address}</p>
+                      <a
+                        href={culturalHouseExternalUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white px-4 py-2.5 rounded-xl text-xs font-bold"
+                      >
+                         Mở chỉ đường tới Nhà văn hóa trên Google Maps <ExternalLink className="w-3.5 h-3.5" />
+                      </a>
+                    </div>
+                  </div>
+                )}
+
+                {directorySubTab === 'qr' && (
+                  <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm text-center space-y-3">
+                    <h3 className="font-bold text-lg text-slate-800">Mã QR truy cập nhanh {appSettings.village_name}</h3>
+                    <QRImage url={siteUrl} size={220} />
+                    <p className="text-xs text-slate-500">Đưa mã này cho bà con quét bằng Zalo hoặc Camera điện thoại để mở ngay ứng dụng.</p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ==================== 5. GỬI PHẢN ÁNH KIẾN NGHỊ & GÓP Ý XÂY DỰNG THÔN ==================== */}
+            {tab === 'voice' && (
+              <div className="space-y-4">
+                <div className="flex gap-2 bg-white p-1.5 rounded-2xl border border-slate-100 shadow-sm">
+                  <button
+                    type="button"
+                    onClick={() => setVoiceSubTab('feedback')}
+                    className={`flex-1 py-2.5 rounded-xl text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 transition ${
+                      voiceSubTab === 'feedback' ? 'bg-amber-600 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    <MessageSquare className="w-4 h-4" /> Phản ánh kiến nghị
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setVoiceSubTab('suggest')}
+                    className={`flex-1 py-2.5 rounded-xl text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 transition ${
+                      voiceSubTab === 'suggest' ? 'bg-emerald-700 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    <Lightbulb className="w-4 h-4" /> Góp ý xây dựng thôn
+                  </button>
+                </div>
+
+                {voiceSubTab === 'feedback' && (
+                  <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm space-y-4">
+                    <h2 className="text-xl font-bold text-slate-800">Gửi Phản ánh & Kiến nghị</h2>
+                    <p className="text-sm text-slate-500">Không cần đăng nhập. Mọi thông tin cá nhân và phản ánh của bà con được bảo mật, chỉ Ban quản trị thôn tiếp nhận xử lý.</p>
+                    <form onSubmit={handleFeedbackSubmit} className="space-y-3">
+                      <div className="grid sm:grid-cols-2 gap-3">
+                        <input placeholder="Họ và tên (không bắt buộc)" value={fbForm.sender_name} onChange={e => setFbForm({ ...fbForm, sender_name: e.target.value })} className="border px-4 py-2.5 rounded-xl text-sm" />
+                        <input placeholder="Số điện thoại (không bắt buộc)" value={fbForm.sender_phone} onChange={e => setFbForm({ ...fbForm, sender_phone: e.target.value })} className="border px-4 py-2.5 rounded-xl text-sm" />
+                      </div>
+                      <select value={fbForm.category} onChange={e => setFbForm({ ...fbForm, category: e.target.value })} className="w-full border px-4 py-2.5 rounded-xl text-sm">
+                        <option>Đường làng, ngõ xóm</option>
+                        <option>Vệ sinh môi trường</option>
+                        <option>Điện chiếu sáng</option>
+                        <option>An ninh, trật tự</option>
+                        <option>Hoạt động cộng đồng</option>
+                        <option>Ý kiến kiến nghị khác</option>
+                      </select>
+                      <textarea required rows={4} placeholder="Nhập nội dung phản ánh hoặc kiến nghị của bà con..." value={fbForm.content} onChange={e => setFbForm({ ...fbForm, content: e.target.value })} className="w-full border px-4 py-2.5 rounded-xl text-sm" />
+                      <button className="w-full bg-amber-600 hover:bg-amber-700 text-white font-semibold py-3 rounded-xl">Gửi phản ánh đến Ban thôn</button>
+                    </form>
+                  </div>
+                )}
+
+                {voiceSubTab === 'suggest' && (
+                  <div className="bg-white p-6 rounded-2xl border border-emerald-200 shadow-sm space-y-4">
+                    <div className="flex items-start gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0">
+                        <Lightbulb className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h2 className="text-xl font-bold text-slate-800">Góp ý xây dựng {appSettings.village_name}</h2>
+                        <p className="text-xs sm:text-sm text-slate-600 mt-1">
+                          Đóng góp ý tưởng, hiến kế phát triển kinh tế – văn hóa – cảnh quan thôn quê. Mọi thông tin người góp ý được <strong>bảo mật tuyệt đối</strong>, chỉ <strong>Ban quản trị thôn</strong> nắm thông tin để trao đổi, tiếp thu.
+                        </p>
+                      </div>
+                    </div>
+
+                    <form onSubmit={handleSuggestionSubmit} className="space-y-3 pt-1">
+                      <div className="grid sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 mb-1">Họ và tên người góp ý <span className="text-red-600">*</span></label>
+                          <input
+                            required
+                            placeholder="Nhập đầy đủ họ và tên..."
+                            value={sugForm.sender_name}
+                            onChange={e => setSugForm({ ...sugForm, sender_name: e.target.value })}
+                            className="w-full border px-4 py-2.5 rounded-xl text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 mb-1">Số điện thoại liên hệ <span className="text-red-600">*</span></label>
+                          <input
+                            required
+                            type="tel"
+                            placeholder="Nhập số điện thoại..."
+                            value={sugForm.sender_phone}
+                            onChange={e => setSugForm({ ...sugForm, sender_phone: e.target.value })}
+                            className="w-full border px-4 py-2.5 rounded-xl text-sm"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="grid sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 mb-1">Khu vực / Xóm / Hộ gia đình <span className="text-red-600">*</span></label>
+                          <input
+                            required
+                            placeholder="Ví dụ: Xóm 2, thôn An Sơn..."
+                            value={sugForm.area}
+                            onChange={e => setSugForm({ ...sugForm, area: e.target.value })}
+                            className="w-full border px-4 py-2.5 rounded-xl text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 mb-1">Lĩnh vực góp ý</label>
+                          <select
+                            value={sugForm.topic}
+                            onChange={e => setSugForm({ ...sugForm, topic: e.target.value })}
+                            className="w-full border px-4 py-2.5 rounded-xl text-sm"
+                          >
+                            <option>Xây dựng đời sống văn hóa, nông thôn mới</option>
+                            <option>Phát triển kinh tế, du lịch vùng Cùa</option>
+                            <option>Hạ tầng, đường giao thông, cảnh quan</option>
+                            <option>Hoạt động đoàn thể, thanh thiếu niên</option>
+                            <option>Chuyển đổi số, cải tiến ứng dụng thôn</option>
+                            <option>Góp ý khác cho Ban quản lý thôn</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1">Nội dung góp ý chi tiết <span className="text-red-600">*</span></label>
+                        <textarea
+                          required
+                          rows={4}
+                          placeholder="Nhập nội dung góp ý xây dựng thôn An Sơn..."
+                          value={sugForm.content}
+                          onChange={e => setSugForm({ ...sugForm, content: e.target.value })}
+                          className="w-full border px-4 py-2.5 rounded-xl text-sm"
+                        />
+                      </div>
+
+                      <button
+                        disabled={submittingSug}
+                        className="w-full bg-emerald-700 hover:bg-emerald-800 text-white font-semibold py-3 rounded-xl disabled:opacity-60"
+                      >
+                        {submittingSug ? 'Đang gửi góp ý...' : 'Gửi góp ý tới Ban quản trị thôn'}
+                      </button>
+                    </form>
+                  </div>
+                )}
+              </div>
+            )}
+          </>
         )}
       </main>
 
+      {/* Thanh điều hướng đáy 4 nút gọn gàng, không trùng lặp */}
       <nav className="fixed bottom-0 inset-x-0 bg-white border-t border-slate-200 flex justify-around py-2 z-40">
         {[
           { id: 'home', label: 'Trang chủ', icon: Home },
-          { id: 'announcements', label: 'Thông báo', icon: Bell },
-          { id: 'finance', label: 'Ủng hộ', icon: HeartHandshake },
-          { id: 'feedback', label: 'Phản ánh', icon: MessageSquare },
-          { id: 'suggest', label: 'Góp ý', icon: Lightbulb },
+          { id: 'feed', label: 'Tin & Lịch', icon: Newspaper },
+          { id: 'finance', label: 'Ủng hộ & Quỹ', icon: HeartHandshake },
+          { id: 'voice', label: 'Gửi ý kiến', icon: MessageSquare },
+          { id: 'directory', label: 'Danh bạ', icon: Compass },
         ].map(n => {
           const Icon = n.icon;
           const active = tab === n.id;
           return (
-            <button key={n.id} onClick={() => setTab(n.id)} className={`flex flex-col items-center gap-0.5 px-2.5 py-1 ${active ? 'text-emerald-700 font-bold' : 'text-slate-500'}`}>
+            <button key={n.id} onClick={() => navigatePublic(n.id)} className={`flex flex-col items-center gap-0.5 px-2.5 py-1 ${active ? 'text-emerald-700 font-bold' : 'text-slate-500'}`}>
               <Icon className="w-5 h-5" />
               <span className="text-[11px]">{n.label}</span>
             </button>
