@@ -16,16 +16,12 @@ export default async function handler(req, res) {
     process.env.VITE_ONESIGNAL_APP_ID ||
     'e21ec54f-f220-4014-a603-d9c0f23977ab';
 
-  const restKey = (
-    process.env.ONESIGNAL_REST_KEY ||
-    process.env.VITE_ONESIGNAL_REST_KEY ||
-    ''
-  ).trim();
+  const restKey = (process.env.ONESIGNAL_REST_KEY || '').trim();
 
   if (!restKey) {
     return res.status(500).json({
       ok: false,
-      error: 'Thiếu biến môi trường VITE_ONESIGNAL_REST_KEY trên Vercel.',
+      error: 'Thiếu biến môi trường máy chủ ONESIGNAL_REST_KEY trên Vercel.',
     });
   }
 

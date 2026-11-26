@@ -13,6 +13,7 @@ import { supabase, isConfigured } from './supabaseClient';
 const APP_VERSION = 'v1.6.5';
 const SEEN_IDS_KEY = 'thon_an_son_seen_post_ids_v1';
 const SETTINGS_STORAGE_KEY = 'thon_an_son_app_settings_v1';
+const FONT_SIZE_STORAGE_KEY = 'thon_an_son_font_size_v1';
 const DONATION_LIST_MARKER = '__THON_AN_SON_UNG_HO__';
 const LEDGER_LIST_MARKER = '__THON_AN_SON_THU_CHI__';
 const SCHEDULE_META_PREFIX = '__ANN_SCHEDULE__:';
@@ -237,6 +238,14 @@ export default function App() {
   const [directorySubTab, setDirectorySubTab] = useState('officials');
   const [voiceSubTab, setVoiceSubTab] = useState('feedback');
   const [adminTab, setAdminTab] = useState('overview');
+  const [largeText, setLargeText] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    try {
+      return window.localStorage.getItem(FONT_SIZE_STORAGE_KEY) === 'large';
+    } catch (_e) {
+      return false;
+    }
+  });
 
   const [quickSearch, setQuickSearch] = useState('');
 
@@ -272,6 +281,7 @@ export default function App() {
   // Admin private data
   const [feedbacks, setFeedbacks] = useState([]);
   const [feedbackFilter, setFeedbackFilter] = useState('all');
+  const [showResolvedFeedback, setShowResolvedFeedback] = useState(false);
   const [households, setHouseholds] = useState([]);
   const [residents, setResidents] = useState([]);
 
@@ -365,6 +375,20 @@ export default function App() {
   const [itemForm, setItemForm] = useState({ list_id: '', name: '', role_or_group: '', phone: '', detail: '', notes: '' });
 
   const siteUrl = typeof window !== 'undefined' ? window.location.origin : 'https://thon-an-son-thong-minh.vercel.app';
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    if (largeText) {
+      document.documentElement.setAttribute('data-font-size', 'large');
+    } else {
+      document.documentElement.removeAttribute('data-font-size');
+    }
+    try {
+      window.localStorage.setItem(FONT_SIZE_STORAGE_KEY, largeText ? 'large' : 'normal');
+    } catch (_e) {
+      // Cỡ chữ vẫn được áp dụng trong phiên hiện tại nếu trình duyệt chặn lưu trữ.
+    }
+  }, [largeText]);
 
   const showToast = (msg, duration = 5000) => {
     setToast(msg);
@@ -796,6 +820,16 @@ export default function App() {
     if (fb.data) setFeedbacks(fb.data);
     if (hh.data) setHouseholds(hh.data);
     if (res.data) setResidents(res.data);
+  };
+
+  const handleFeedbackStatusChange = async (feedbackId, status) => {
+    const { error } = await supabase.from('feedbacks').update({ status }).eq('id', feedbackId);
+    if (error) {
+      showToast('Không cập nhật được trạng thái phản ánh: ' + error.message);
+      return;
+    }
+    await fetchAdminData();
+    showToast('Đã cập nhật trạng thái');
   };
 
   const ensureSystemFinanceList = async (marker, title) => {
@@ -1541,7 +1575,10 @@ export default function App() {
     }
 
     const newReceivedCount = feedbacks.filter(f => f.status === 'received').length;
-    const filteredFeedbackList = feedbacks.filter((fb) => {
+    const activeFeedbacks = feedbacks.filter(fb => fb.status !== 'resolved');
+    const resolvedFeedbacks = feedbacks.filter(fb => fb.status === 'resolved');
+    const feedbackListSource = showResolvedFeedback ? resolvedFeedbacks : activeFeedbacks;
+    const filteredFeedbackList = feedbackListSource.filter((fb) => {
       if (feedbackFilter === 'suggestion') return isSuggestionRecord(fb);
       if (feedbackFilter === 'feedback') return !isSuggestionRecord(fb);
       return true;
@@ -2504,11 +2541,11 @@ export default function App() {
                   <h1 className="text-2xl font-bold">Phản ánh & Góp ý từ bà con (Nội bộ)</h1>
                   <p className="text-xs text-slate-500 mt-0.5">Chỉ người đăng nhập Quản trị mới nhận chuông báo và xem được danh sách này.</p>
                 </div>
-                <div className="flex gap-1.5 bg-white p-1 rounded-xl border text-xs font-semibold">
+                <div className="flex flex-wrap justify-end gap-1.5 bg-white p-1 rounded-xl border text-xs font-semibold">
                   {[
-                    { id: 'all', label: `Tất cả (${feedbacks.length})` },
-                    { id: 'suggestion', label: `Góp ý cho thôn (${feedbacks.filter(isSuggestionRecord).length})` },
-                    { id: 'feedback', label: `Phản ánh (${feedbacks.filter(fb => !isSuggestionRecord(fb)).length})` },
+                    { id: 'all', label: `Tất cả (${feedbackListSource.length})` },
+                    { id: 'suggestion', label: `Góp ý (${feedbackListSource.filter(isSuggestionRecord).length})` },
+                    { id: 'feedback', label: `Phản ánh (${feedbackListSource.filter(fb => !isSuggestionRecord(fb)).length})` },
                   ].map((f) => (
                     <button
                       key={f.id}
@@ -2519,10 +2556,22 @@ export default function App() {
                       {f.label}
                     </button>
                   ))}
+                  <button
+                    type="button"
+                    onClick={() => setShowResolvedFeedback(value => !value)}
+                    aria-pressed={showResolvedFeedback}
+                    className={`px-3 py-1.5 rounded-lg transition ${showResolvedFeedback ? 'bg-amber-600 text-white' : 'text-slate-600 hover:bg-slate-100'}`}
+                  >
+                    {showResolvedFeedback ? 'Đang xử lý' : `Kho lưu trữ (${resolvedFeedbacks.length})`}
+                  </button>
                 </div>
               </div>
 
-              {filteredFeedbackList.length === 0 && <p className="text-slate-500 text-sm">Chưa có mục nào trong nhóm này.</p>}
+              {filteredFeedbackList.length === 0 && (
+                <p className="text-slate-500 text-sm">
+                  {showResolvedFeedback ? 'Kho lưu trữ chưa có nội dung đã phản hồi trong nhóm này.' : 'Không có phản ánh hoặc góp ý đang xử lý trong nhóm này.'}
+                </p>
+              )}
               {filteredFeedbackList.map(fb => {
                 const isSug = isSuggestionRecord(fb);
                 const displayCat = isSug ? fb.category.replace(/^\[GÓP Ý\]\s*/, '') : fb.category;
@@ -2535,7 +2584,7 @@ export default function App() {
                         </span>
                         <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-700">{displayCat}</span>
                       </div>
-                      <select value={fb.status} onChange={async (e) => { await supabase.from('feedbacks').update({ status: e.target.value }).eq('id', fb.id); fetchAdminData(); showToast('Đã cập nhật trạng thái'); }} className="border rounded-lg px-2 py-1 text-xs">
+                      <select value={fb.status} onChange={(e) => handleFeedbackStatusChange(fb.id, e.target.value)} className="border rounded-lg px-2 py-1 text-xs">
                         <option value="received">Đã tiếp nhận</option>
                         <option value="reviewing">Đang xem xét</option>
                         <option value="resolved">Đã phản hồi / Xử lý</option>
@@ -2910,6 +2959,19 @@ export default function App() {
                 <Lock className="w-3.5 h-3.5" /> Quản trị
               </button>
             </div>
+          </div>
+
+          <div className="flex justify-end mb-3">
+            <button
+              type="button"
+              onClick={() => setLargeText(value => !value)}
+              aria-pressed={largeText}
+              className={`inline-flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-bold transition ${largeText ? 'bg-white text-emerald-800' : 'bg-white/15 hover:bg-white/25 text-white'}`}
+              title={largeText ? 'Chuyển về cỡ chữ thường' : 'Tăng cỡ chữ để dễ đọc hơn'}
+            >
+              <span className="text-lg leading-none" aria-hidden="true">{largeText ? 'A−' : 'A+'}</span>
+              {largeText ? 'Cỡ chữ thường' : 'Tăng cỡ chữ'}
+            </button>
           </div>
 
           <button

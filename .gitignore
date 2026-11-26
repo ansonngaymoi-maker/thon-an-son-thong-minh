@@ -1,0 +1,4 @@
+# Keep local and deployment secrets out of source control.
+.env
+.env.*
+!.env.example

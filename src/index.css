@@ -2,6 +2,14 @@
 @tailwind components;
 @tailwind utilities;
 
+html[data-font-size="large"] {
+  font-size: 120%;
+}
+
+html[data-font-size="large"] [class~="text-[11px]"] {
+  font-size: calc(11px * 1.2) !important;
+}
+
 @media print {
   .no-print {
     display: none !important;
