@@ -2935,7 +2935,7 @@ export default function App() {
         <div className="max-w-2xl mx-auto px-4 pt-3.5 pb-5">
           <div className="flex justify-between items-center mb-3">
             <span className="text-[11px] bg-white/15 backdrop-blur-sm px-3 py-1 rounded-full capitalize font-medium">{todayStr}</span>
-            <div className="flex items-center gap-1.5">
+            <div className="flex flex-wrap items-center justify-end gap-1">
               <button
                 onClick={requestNotification}
                 className={`px-2.5 py-1.5 rounded-xl text-[11px] font-bold flex items-center gap-1 transition ${
@@ -2944,6 +2944,16 @@ export default function App() {
                 title="Bật thông báo chuông"
               >
                 <Bell className="w-3.5 h-3.5" /> {pushSubscribed ? 'Đã bật chuông' : 'Bật chuông'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setLargeText(value => !value)}
+                aria-pressed={largeText}
+                aria-label={largeText ? 'Chuyển về cỡ chữ thường' : 'Tăng cỡ chữ'}
+                className={`p-2 rounded-xl text-sm font-extrabold transition ${largeText ? 'bg-white text-emerald-800' : 'bg-white/15 hover:bg-white/25 text-white'}`}
+                title={largeText ? 'Chuyển về cỡ chữ thường' : 'Tăng cỡ chữ để dễ đọc hơn'}
+              >
+                {largeText ? 'A−' : 'A+'}
               </button>
               <button
                 onClick={handleManualRefresh}
@@ -2959,19 +2969,6 @@ export default function App() {
                 <Lock className="w-3.5 h-3.5" /> Quản trị
               </button>
             </div>
-          </div>
-
-          <div className="flex justify-end mb-3">
-            <button
-              type="button"
-              onClick={() => setLargeText(value => !value)}
-              aria-pressed={largeText}
-              className={`inline-flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-bold transition ${largeText ? 'bg-white text-emerald-800' : 'bg-white/15 hover:bg-white/25 text-white'}`}
-              title={largeText ? 'Chuyển về cỡ chữ thường' : 'Tăng cỡ chữ để dễ đọc hơn'}
-            >
-              <span className="text-lg leading-none" aria-hidden="true">{largeText ? 'A−' : 'A+'}</span>
-              {largeText ? 'Cỡ chữ thường' : 'Tăng cỡ chữ'}
-            </button>
           </div>
 
           <button
