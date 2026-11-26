@@ -323,6 +323,7 @@ export default function App() {
   const isInitialAdmin = typeof window !== 'undefined' && window.location.pathname.startsWith('/admin');
   const [mode, setMode] = useState(isInitialAdmin ? 'admin' : 'public');
   const [tab, setTab] = useState('home');
+  const [showAllHomeNews, setShowAllHomeNews] = useState(false);
   const [feedSubTab, setFeedSubTab] = useState('all');
   const [directorySubTab, setDirectorySubTab] = useState('officials');
   const [voiceSubTab, setVoiceSubTab] = useState('feedback');
@@ -679,8 +680,8 @@ export default function App() {
       try {
         const n = new Notification(title, {
           body,
-          icon: '/icon.svg',
-          badge: '/icon.svg',
+          icon: '/logo.png',
+          badge: '/logo.png',
           tag: postParam || 'thon-an-son-update',
         });
         n.onclick = () => {
@@ -3206,7 +3207,7 @@ export default function App() {
                 type="button"
                 onClick={requestNotification}
                 aria-label={pushSubscribed ? 'Thông báo đang bật' : 'Bật thông báo'}
-                className={`p-2 rounded-xl transition ${
+                className={`w-10 h-10 shrink-0 inline-flex items-center justify-center rounded-xl transition ${
                   pushSubscribed ? 'bg-white/20 text-white' : 'bg-amber-400 text-emerald-950 hover:bg-amber-300'
                 }`}
                 title={pushSubscribed ? 'Thông báo đang bật' : 'Bật thông báo'}
@@ -3218,23 +3219,25 @@ export default function App() {
                 onClick={() => setLargeText(value => !value)}
                 aria-pressed={largeText}
                 aria-label={largeText ? 'Chuyển về cỡ chữ thường' : 'Tăng cỡ chữ'}
-                className={`p-2 rounded-xl text-sm font-extrabold transition ${largeText ? 'bg-white text-emerald-800' : 'bg-white/15 hover:bg-white/25 text-white'}`}
+                className={`w-10 h-10 shrink-0 inline-flex items-center justify-center rounded-xl text-sm font-extrabold transition ${largeText ? 'bg-white text-emerald-800' : 'bg-white/15 hover:bg-white/25 text-white'}`}
                 title={largeText ? 'Chuyển về cỡ chữ thường' : 'Tăng cỡ chữ để dễ đọc hơn'}
               >
                 {largeText ? 'A−' : 'A+'}
               </button>
               <button
+                type="button"
                 onClick={handleManualRefresh}
-                className="bg-white/15 hover:bg-white/25 p-2 rounded-xl transition"
+                className="w-10 h-10 shrink-0 inline-flex items-center justify-center bg-white/15 hover:bg-white/25 rounded-xl transition"
+                aria-label="Làm mới tin"
                 title="Làm mới tin"
               >
                 <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
               </button>
-              <button onClick={() => setShowQRModal(true)} className="bg-white/15 hover:bg-white/25 p-2 rounded-xl transition" title="Mã QR chia sẻ">
+              <button type="button" onClick={() => setShowQRModal(true)} className="w-10 h-10 shrink-0 inline-flex items-center justify-center bg-white/15 hover:bg-white/25 rounded-xl transition" aria-label="Mã QR chia sẻ" title="Mã QR chia sẻ">
                 <QrCode className="w-4 h-4" />
               </button>
-              <button onClick={() => setMode('admin')} className="bg-white/15 hover:bg-white/25 px-2.5 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1 transition">
-                <Lock className="w-3.5 h-3.5" /> Quản trị
+              <button type="button" onClick={() => setMode('admin')} className="w-10 h-10 shrink-0 inline-flex items-center justify-center bg-white/15 hover:bg-white/25 rounded-xl transition" aria-label="Quản trị" title="Quản trị">
+                <Lock className="w-4 h-4" />
               </button>
             </div>
           </div>
@@ -3245,7 +3248,7 @@ export default function App() {
             className="flex items-center gap-3 text-left group cursor-pointer active:scale-[0.99] transition"
             title="Bấm vào ngôi nhà để quay về Trang chủ"
           >
-            <img src="/icon.svg" alt="Logo Thôn An Sơn" className="w-12 h-12 rounded-2xl shadow-md bg-white/10 p-1 group-hover:bg-white/20 transition" />
+            <img src="/logo.png" alt="Logo Thôn An Sơn" className="w-12 h-12 rounded-full shadow-md bg-white p-0.5 group-hover:bg-white/90 transition" />
             <div>
               <h1 className="text-xl sm:text-2xl font-extrabold tracking-tight leading-tight">{appSettings.village_name}</h1>
               <p className="text-xs text-emerald-100 font-medium">{appSettings.subtitle}</p>
@@ -3465,34 +3468,47 @@ export default function App() {
                         </div>
                       ))}
 
-                      {allPublishedNews.slice(0, 2).map((n) => (
-                        <div key={n.id} className="bg-white p-4 rounded-2xl border-l-4 border-l-teal-500 border border-slate-100 shadow-sm space-y-2">
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="flex items-center gap-2">
-                              <span className="text-[11px] bg-teal-50 text-teal-800 px-2.5 py-0.5 rounded-full font-bold">{n.category}</span>
-                              <span className="text-[11px] text-slate-400">{new Date(n.created_at).toLocaleDateString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })}</span>
+                      {allPublishedNews.slice(0, showAllHomeNews ? allPublishedNews.length : 1).map((n, index) => {
+                        const isFirstNewsToggle = index === 0 && allPublishedNews.length > 1;
+                        return (
+                          <div key={n.id} className="bg-white p-4 rounded-2xl border-l-4 border-l-teal-500 border border-slate-100 shadow-sm space-y-2">
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex items-center gap-2">
+                                <span className="text-[11px] bg-teal-50 text-teal-800 px-2.5 py-0.5 rounded-full font-bold">{n.category}</span>
+                                <span className="text-[11px] text-slate-400">{new Date(n.created_at).toLocaleDateString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })}</span>
+                              </div>
+                              {session && n.sourceAnnId && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteAnnouncementRow(n.sourceAnnId, n.title)}
+                                  className="text-red-500 hover:bg-red-50 p-1.5 rounded-lg"
+                                  title="Xóa bài này"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              )}
                             </div>
-                            {session && n.sourceAnnId && (
+                            <h3 className="font-bold text-slate-800 text-base leading-snug">
                               <button
                                 type="button"
-                                onClick={() => handleDeleteAnnouncementRow(n.sourceAnnId, n.title)}
-                                className="text-red-500 hover:bg-red-50 p-1.5 rounded-lg"
-                                title="Xóa bài này"
+                                onClick={() => isFirstNewsToggle ? setShowAllHomeNews(value => !value) : navigatePublic('feed', 'news')}
+                                aria-expanded={isFirstNewsToggle ? showAllHomeNews : undefined}
+                                title={isFirstNewsToggle ? (showAllHomeNews ? 'Bấm để thu gọn danh sách tin tức' : 'Bấm để xem tất cả tin tức') : 'Mở mục tin tức'}
+                                className="flex w-full items-center justify-between gap-2 text-left hover:text-emerald-700"
                               >
-                                <Trash2 className="w-4 h-4" />
+                                <span>{n.title}</span>
+                                {isFirstNewsToggle && (
+                                  <span className="shrink-0 text-xs font-semibold text-teal-700">
+                                    {showAllHomeNews ? 'Thu gọn' : 'Xem tất cả'}
+                                  </span>
+                                )}
                               </button>
-                            )}
+                            </h3>
+                            <p className="text-sm text-slate-600 line-clamp-2 whitespace-pre-line">{n.content}</p>
+                            {n.image_url && <img src={n.image_url} alt={n.title} className="w-full max-h-40 object-contain rounded-xl border border-slate-100 bg-slate-50" />}
                           </div>
-                          <h3
-                            onClick={() => navigatePublic('feed', 'news')}
-                            className="font-bold text-slate-800 text-base leading-snug cursor-pointer hover:text-emerald-700"
-                          >
-                            {n.title}
-                          </h3>
-                          <p className="text-sm text-slate-600 line-clamp-2 whitespace-pre-line">{n.content}</p>
-                          {n.image_url && <img src={n.image_url} alt={n.title} className="w-full max-h-40 object-contain rounded-xl border border-slate-100 bg-slate-50" />}
-                        </div>
-                      ))}
+                        );
+                      })}
                     </>
                   )}
                 </section>
