@@ -18,6 +18,35 @@ const DONATION_LIST_MARKER = '__THON_AN_SON_UNG_HO__';
 const LEDGER_LIST_MARKER = '__THON_AN_SON_THU_CHI__';
 const SCHEDULE_META_PREFIX = '__ANN_SCHEDULE__:';
 const NEWS_TAG_PREFIX = '__IS_NEWS__:1\n';
+const NEWS_IMAGE_META_PREFIX = '__NEWS_IMAGE__:';
+const FEEDBACK_ATTACHMENT_META_PREFIX = '__FEEDBACK_ATTACHMENTS__:';
+const FEEDBACK_ATTACHMENT_BUCKET = 'phan-anh-dinh-kem';
+const MAX_FEEDBACK_ATTACHMENT_COUNT = 3;
+const MAX_FEEDBACK_ATTACHMENT_SIZE = 8 * 1024 * 1024;
+const MAX_FEEDBACK_ATTACHMENTS_TOTAL_SIZE = 15 * 1024 * 1024;
+const FEEDBACK_ATTACHMENT_MIME_TYPES = {
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+  '.heic': 'image/heic',
+  '.heif': 'image/heif',
+  '.pdf': 'application/pdf',
+  '.doc': 'application/msword',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.xls': 'application/vnd.ms-excel',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.txt': 'text/plain',
+};
+const NEWS_IMAGE_EXTENSIONS = {
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/webp': 'webp',
+  'image/gif': 'gif',
+  'image/heic': 'heic',
+  'image/heif': 'heif',
+};
 
 const ONESIGNAL_APP_ID =
   (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_ONESIGNAL_APP_ID) ||
@@ -81,6 +110,66 @@ const buildCulturalHouseExternalUrl = (settings) => {
 };
 
 const isSuggestionRecord = (fb) => String(fb?.category || '').startsWith('[GÓP Ý]');
+
+const packNewsContent = (content, imageUrl) => {
+  if (!imageUrl) return String(content || '');
+  return `${NEWS_IMAGE_META_PREFIX}${JSON.stringify({ imageUrl })}\n${String(content || '')}`;
+};
+
+const parseNewsContent = (raw) => {
+  const text = String(raw || '');
+  if (!text.startsWith(NEWS_IMAGE_META_PREFIX)) return { content: text, imageUrl: '' };
+  const firstNl = text.indexOf('\n');
+  if (firstNl < 0) return { content: text, imageUrl: '' };
+  try {
+    const meta = JSON.parse(text.slice(NEWS_IMAGE_META_PREFIX.length, firstNl));
+    return { content: text.slice(firstNl + 1), imageUrl: String(meta?.imageUrl || '') };
+  } catch (_e) {
+    return { content: text, imageUrl: '' };
+  }
+};
+
+const packFeedbackContent = (content, attachments) => {
+  if (!attachments?.length) return String(content || '');
+  return `${FEEDBACK_ATTACHMENT_META_PREFIX}${JSON.stringify(attachments)}\n${String(content || '')}`;
+};
+
+const parseFeedbackContent = (raw) => {
+  const text = String(raw || '');
+  if (!text.startsWith(FEEDBACK_ATTACHMENT_META_PREFIX)) return { content: text, attachments: [] };
+  const firstNl = text.indexOf('\n');
+  if (firstNl < 0) return { content: text, attachments: [] };
+  try {
+    const attachments = JSON.parse(text.slice(FEEDBACK_ATTACHMENT_META_PREFIX.length, firstNl));
+    return {
+      content: text.slice(firstNl + 1),
+      attachments: Array.isArray(attachments) ? attachments : [],
+    };
+  } catch (_e) {
+    return { content: text, attachments: [] };
+  }
+};
+
+const getFeedbackAttachmentMimeType = (file) => {
+  const allowedTypes = Object.values(FEEDBACK_ATTACHMENT_MIME_TYPES);
+  const extension = `.${String(file.name || '').split('.').pop().toLowerCase()}`;
+  const extensionType = FEEDBACK_ATTACHMENT_MIME_TYPES[extension] || '';
+  if (allowedTypes.includes(file.type)) return extensionType && extensionType !== file.type ? '' : file.type;
+  if (!file.type || file.type === 'application/octet-stream') return extensionType;
+  return '';
+};
+
+const getFeedbackAttachmentExtension = (file, mimeType) => {
+  const originalExtension = `.${String(file.name || '').split('.').pop().toLowerCase()}`;
+  if (FEEDBACK_ATTACHMENT_MIME_TYPES[originalExtension] === mimeType) return originalExtension;
+  return Object.keys(FEEDBACK_ATTACHMENT_MIME_TYPES).find((extension) => FEEDBACK_ATTACHMENT_MIME_TYPES[extension] === mimeType) || '.bin';
+};
+
+const getNewsImageMimeType = (file) => {
+  if (NEWS_IMAGE_EXTENSIONS[file.type]) return file.type;
+  const extension = String(file.name || '').split('.').pop().toLowerCase();
+  return Object.entries(NEWS_IMAGE_EXTENSIONS).find(([, allowedExtension]) => allowedExtension === extension)?.[0] || '';
+};
 
 const parseMoneyAmount = (raw) => {
   if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
@@ -338,6 +427,9 @@ export default function App() {
   const [annImageFile, setAnnImageFile] = useState(null);
   const [annImagePreview, setAnnImagePreview] = useState('');
   const [uploadingAnn, setUploadingAnn] = useState(false);
+  const [newsImageFile, setNewsImageFile] = useState(null);
+  const [newsImagePreview, setNewsImagePreview] = useState('');
+  const [uploadingNews, setUploadingNews] = useState(false);
   const [sendPushOnAnn, setSendPushOnAnn] = useState(true);
   const [useAnnSchedule, setUseAnnSchedule] = useState(false);
   const [annScheduleDate, setAnnScheduleDate] = useState(defaultLater.dateStr);
@@ -355,6 +447,8 @@ export default function App() {
 
   // Feedback & Suggestion forms
   const [fbForm, setFbForm] = useState({ sender_name: '', sender_phone: '', category: 'Đường làng, ngõ xóm', content: '' });
+  const [feedbackAttachmentFiles, setFeedbackAttachmentFiles] = useState([]);
+  const [submittingFeedback, setSubmittingFeedback] = useState(false);
   const [sugForm, setSugForm] = useState({
     sender_name: '',
     sender_phone: '',
@@ -725,7 +819,7 @@ export default function App() {
           const isSug = isSuggestionRecord(row);
           triggerBrowserAlert(
             isSug ? 'Góp ý mới cho thôn (Quản trị)' : 'Phản ánh kiến nghị mới (Quản trị)',
-            `${row.sender_name || 'Người dân'}: ${(row.content || '').slice(0, 80)}`,
+            `${row.sender_name || 'Người dân'}: ${parseFeedbackContent(row.content).content.slice(0, 80)}`,
             'admin-feedbacks'
           );
         }
@@ -1145,23 +1239,107 @@ export default function App() {
     showToast('Đã đăng xuất.');
   };
 
+  const handleFeedbackAttachmentSelection = (e) => {
+    const selectedFiles = Array.from(e.target.files || []);
+    e.target.value = '';
+    if (selectedFiles.length === 0) return;
+
+    const nextFiles = [...feedbackAttachmentFiles];
+    let rejectedType = false;
+    let rejectedSize = false;
+    let rejectedCount = false;
+    for (const file of selectedFiles) {
+      const mimeType = getFeedbackAttachmentMimeType(file);
+      const duplicate = nextFiles.some((existing) =>
+        existing.name === file.name && existing.size === file.size && existing.lastModified === file.lastModified
+      );
+      if (duplicate) continue;
+      if (!mimeType) {
+        rejectedType = true;
+        continue;
+      }
+      if (file.size > MAX_FEEDBACK_ATTACHMENT_SIZE) {
+        rejectedSize = true;
+        continue;
+      }
+      const totalSize = nextFiles.reduce((sum, existing) => sum + existing.size, 0);
+      if (nextFiles.length >= MAX_FEEDBACK_ATTACHMENT_COUNT || totalSize + file.size > MAX_FEEDBACK_ATTACHMENTS_TOTAL_SIZE) {
+        rejectedCount = true;
+        continue;
+      }
+      nextFiles.push(file);
+    }
+
+    setFeedbackAttachmentFiles(nextFiles);
+    if (rejectedType) showToast('Chỉ nhận ảnh, PDF, Word, Excel hoặc tệp văn bản.');
+    else if (rejectedSize) showToast('Mỗi tệp đính kèm tối đa 8MB.');
+    else if (rejectedCount) showToast('Chọn tối đa 3 tệp, tổng dung lượng không quá 15MB.');
+  };
+
   const handleFeedbackSubmit = async (e) => {
     e.preventDefault();
-    if (!fbForm.content.trim()) return;
-    const { error } = await supabase.from('feedbacks').insert([fbForm]);
-    if (!error) {
+    const cleanContent = fbForm.content.trim();
+    if (!cleanContent) return;
+    setSubmittingFeedback(true);
+    try {
+      const batchId = window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const attachments = [];
+      for (const file of feedbackAttachmentFiles) {
+        const mimeType = getFeedbackAttachmentMimeType(file);
+        const extension = getFeedbackAttachmentExtension(file, mimeType);
+        const fileId = window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        const path = `feedbacks/${batchId}/${fileId}${extension}`;
+        const { error: uploadError } = await supabase.storage
+          .from(FEEDBACK_ATTACHMENT_BUCKET)
+          .upload(path, file, { cacheControl: '3600', upsert: false, contentType: mimeType });
+        if (uploadError) throw new Error(`Không tải được tệp "${file.name}": ${uploadError.message}`);
+        attachments.push({
+          path,
+          name: String(file.name || 'Tệp đính kèm').slice(0, 120),
+          size: file.size,
+          mimeType,
+        });
+      }
+
+      const payload = {
+        ...fbForm,
+        content: packFeedbackContent(cleanContent, attachments),
+      };
+      const { error } = await supabase.from('feedbacks').insert([payload]);
+      if (error) throw new Error(error.message);
+
       const senderLabel = fbForm.sender_name.trim() || 'Người dân ẩn danh';
-      const summaryText = fbForm.content.trim().slice(0, 90);
       await dispatchOneSignalPush({
         heading: `Phản ánh mới – ${appSettings.village_name}`,
-        content: `${senderLabel} (${fbForm.category}): ${summaryText}`,
+        content: `${senderLabel} (${fbForm.category}): ${cleanContent.slice(0, 90)}`,
         launchUrl: `${siteUrl}/?post=admin-feedbacks`,
         target: 'admins',
       });
       setFbForm({ sender_name: '', sender_phone: '', category: 'Đường làng, ngõ xóm', content: '' });
+      setFeedbackAttachmentFiles([]);
       showToast('Đã gửi phản ánh đến Ban quản trị thôn. Cảm ơn bà con!');
-    } else {
-      showToast('Có lỗi xảy ra, vui lòng thử lại.');
+    } catch (err) {
+      showToast(`Không gửi được phản ánh: ${err?.message || 'Vui lòng thử lại.'}`);
+    } finally {
+      setSubmittingFeedback(false);
+    }
+  };
+
+  const handleDownloadFeedbackAttachment = async (attachment) => {
+    try {
+      if (!attachment?.path) throw new Error('Thiếu đường dẫn tệp.');
+      const { data, error } = await supabase.storage.from(FEEDBACK_ATTACHMENT_BUCKET).download(attachment.path);
+      if (error || !data) throw new Error(error?.message || 'Vui lòng thử lại.');
+      const url = URL.createObjectURL(data);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = String(attachment.name || 'tep-dinh-kem').replace(/[\\/:*?"<>|]/g, '_');
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (err) {
+      showToast('Không tải được tệp đính kèm: ' + (err?.message || 'Vui lòng thử lại.'));
     }
   };
 
@@ -1223,6 +1401,30 @@ export default function App() {
   const clearAnnImage = () => {
     setAnnImageFile(null);
     setAnnImagePreview('');
+  };
+
+  const handleNewsImageChange = (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    const mimeType = getNewsImageMimeType(file);
+    if (!mimeType) {
+      showToast('Chỉ nhận ảnh JPG, PNG, WEBP, GIF hoặc HEIC.');
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      showToast('Ảnh quá lớn (tối đa 5MB). Vui lòng chọn ảnh nhẹ hơn.');
+      return;
+    }
+    if (newsImagePreview) URL.revokeObjectURL(newsImagePreview);
+    setNewsImageFile(file);
+    setNewsImagePreview(URL.createObjectURL(file));
+  };
+
+  const clearNewsImage = () => {
+    if (newsImagePreview) URL.revokeObjectURL(newsImagePreview);
+    setNewsImageFile(null);
+    setNewsImagePreview('');
   };
 
   const formatPushResultMessage = (baseSuccessMsg, pushRes) => {
@@ -1306,41 +1508,56 @@ export default function App() {
 
   const handleNewsSubmit = async (e) => {
     e.preventDefault();
-    const scheduledMs = useNewsSchedule ? parseVietnamScheduledMs(newsScheduleDate, newsScheduleTime) : 0;
-    const isFutureScheduled = Boolean(useNewsSchedule && scheduledMs > Date.now() + 15000);
+    setUploadingNews(true);
+    try {
+      let imageUrl = '';
+      if (newsImageFile) {
+        const mimeType = getNewsImageMimeType(newsImageFile);
+        const extension = NEWS_IMAGE_EXTENSIONS[mimeType];
+        const fileId = window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        const filePath = `news-${fileId}.${extension}`;
+        const { error: uploadError } = await supabase.storage
+          .from('anh-thong-bao')
+          .upload(filePath, newsImageFile, { cacheControl: '3600', upsert: false, contentType: mimeType });
+        if (uploadError) throw new Error('Lỗi tải ảnh lên: ' + uploadError.message);
+        imageUrl = supabase.storage.from('anh-thong-bao').getPublicUrl(filePath).data.publicUrl;
+      }
 
-    if (isFutureScheduled) {
-      const packedContent = packScheduledItem({
-        cleanContent: newsForm.content,
-        scheduleDate: newsScheduleDate,
-        scheduleTime: newsScheduleTime,
-        sendPush: sendPushOnNews,
-        isNewsPost: true,
-      });
-      const { error } = await supabase.from('announcements').insert([
-        {
+      const scheduledMs = useNewsSchedule ? parseVietnamScheduledMs(newsScheduleDate, newsScheduleTime) : 0;
+      const isFutureScheduled = Boolean(useNewsSchedule && scheduledMs > Date.now() + 15000);
+
+      if (isFutureScheduled) {
+        const packedContent = packScheduledItem({
+          cleanContent: newsForm.content,
+          scheduleDate: newsScheduleDate,
+          scheduleTime: newsScheduleTime,
+          sendPush: sendPushOnNews,
+          isNewsPost: true,
+        });
+        const scheduledNews = {
           title: newsForm.title,
           content: packedContent,
           priority: 'normal',
           is_pinned: false,
-        },
-      ]);
-      if (!error) {
+        };
+        if (imageUrl) scheduledNews.image_url = imageUrl;
+        const { error } = await supabase.from('announcements').insert([scheduledNews]);
+        if (error) throw new Error(error.message);
+
         const nextLater = getVietnamDateTimeInputs(5);
         setNewsForm({ title: '', content: '', category: 'Hoạt động cộng đồng', video_url: '' });
+        clearNewsImage();
         setUseNewsSchedule(false);
         setNewsScheduleDate(nextLater.dateStr);
         setNewsScheduleTime(nextLater.timeStr);
         fetchPublicData();
         showToast(`Đã hẹn giờ đăng tin tức lúc ${newsScheduleDate} ${newsScheduleTime} (GMT+7)! Tới giờ máy chủ sẽ tự đăng và đẩy chuông báo.`, 6000);
-      } else {
-        showToast('Lỗi: ' + error.message);
+        return;
       }
-      return;
-    }
 
-    const { data: insertedRows, error } = await supabase.from('news').insert([newsForm]).select();
-    if (!error) {
+      const newsPayload = { ...newsForm, content: packNewsContent(newsForm.content, imageUrl) };
+      const { data: insertedRows, error } = await supabase.from('news').insert([newsPayload]).select();
+      if (error) throw new Error(error.message);
       const created = insertedRows?.[0];
       let msg = 'Đã đăng bài viết!';
       if (sendPushOnNews) {
@@ -1348,16 +1565,20 @@ export default function App() {
           heading: `Tin tức mới – ${appSettings.village_name}`,
           content: newsForm.title,
           launchUrl: created ? getPostShareUrl('news', created.id) : siteUrl,
+          imageUrl: imageUrl || undefined,
           target: 'all',
         });
         msg = formatPushResultMessage('Đã đăng bài viết!', pushRes);
       }
       setNewsForm({ title: '', content: '', category: 'Hoạt động cộng đồng', video_url: '' });
+      clearNewsImage();
       setUseNewsSchedule(false);
       fetchPublicData();
       showToast(msg, 6000);
-    } else {
-      showToast('Lỗi: ' + error.message);
+    } catch (err) {
+      showToast('Lỗi đăng tin: ' + (err?.message || 'Vui lòng thử lại.'));
+    } finally {
+      setUploadingNews(false);
     }
   };
 
@@ -1471,16 +1692,23 @@ export default function App() {
   const scheduledPendingItems = formattedAnnouncements.filter((a) => a.isScheduledPending && !a.isNewsPost);
 
   const allPublishedNews = [
-    ...publishedScheduledNews.map((item) => ({
-      id: `sch-${item.id}`,
-      sourceAnnId: item.id,
-      title: item.title,
-      content: item.cleanContent,
-      category: 'Tin tức hẹn giờ',
-      created_at: item.created_at,
-      video_url: '',
-    })),
-    ...news,
+    ...publishedScheduledNews.map((item) => {
+      const parsed = parseNewsContent(item.cleanContent);
+      return {
+        id: `sch-${item.id}`,
+        sourceAnnId: item.id,
+        title: item.title,
+        content: parsed.content,
+        image_url: item.image_url || parsed.imageUrl,
+        category: 'Tin tức hẹn giờ',
+        created_at: item.created_at,
+        video_url: '',
+      };
+    }),
+    ...news.map((item) => {
+      const parsed = parseNewsContent(item.content);
+      return { ...item, content: parsed.content, image_url: parsed.imageUrl };
+    }),
   ];
 
   const upcomingEvents = events.filter((ev) => {
@@ -1835,6 +2063,20 @@ export default function App() {
                 <input required placeholder="Tiêu đề bài viết..." value={newsForm.title} onChange={e => setNewsForm({ ...newsForm, title: e.target.value })} className="w-full border px-4 py-2.5 rounded-xl" />
                 <textarea required rows={4} placeholder="Nội dung bài viết..." value={newsForm.content} onChange={e => setNewsForm({ ...newsForm, content: e.target.value })} className="w-full border px-4 py-2.5 rounded-xl" />
                 <input placeholder="Link video YouTube (nếu có)..." value={newsForm.video_url} onChange={e => setNewsForm({ ...newsForm, video_url: e.target.value })} className="w-full border px-4 py-2.5 rounded-xl text-sm" />
+                <div className="space-y-2">
+                  <div className="text-sm font-semibold text-slate-700">Ảnh kèm tin tức (không bắt buộc)</div>
+                  <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-100">
+                    <Upload className="w-4 h-4" /> Chọn ảnh
+                    <input type="file" accept=".jpg,.jpeg,.png,.webp,.gif,.heic,.heif" onChange={handleNewsImageChange} className="sr-only" />
+                  </label>
+                  <p className="text-xs text-slate-500">Ảnh JPG, PNG, WEBP, GIF hoặc HEIC; tối đa 5MB.</p>
+                  {newsImagePreview && (
+                    <div className="flex flex-wrap items-start gap-3">
+                      <img src={newsImagePreview} alt="Xem trước ảnh tin tức" className="max-h-48 rounded-xl border border-slate-200 object-contain" />
+                      <button type="button" onClick={clearNewsImage} className="text-sm font-semibold text-red-600 hover:underline">Gỡ ảnh</button>
+                    </div>
+                  )}
+                </div>
 
                 <div className="flex flex-wrap items-center gap-4">
                   <label className="flex items-center gap-2 text-sm font-semibold text-amber-800">
@@ -1864,8 +2106,8 @@ export default function App() {
                 )}
 
                 <div className="flex justify-end">
-                  <button className="bg-emerald-700 text-white px-6 py-2.5 rounded-xl font-semibold">
-                    {useNewsSchedule ? 'Lưu hẹn giờ đăng tin' : 'Đăng bài viết ngay'}
+                  <button disabled={uploadingNews} className="bg-emerald-700 text-white px-6 py-2.5 rounded-xl font-semibold disabled:opacity-60">
+                    {uploadingNews ? (newsImageFile ? 'Đang tải ảnh và đăng tin...' : 'Đang đăng tin...') : useNewsSchedule ? 'Lưu hẹn giờ đăng tin' : 'Đăng bài viết ngay'}
                   </button>
                 </div>
               </form>
@@ -1883,6 +2125,7 @@ export default function App() {
                         </div>
                         <div className="font-bold text-slate-800">{item.title}</div>
                         <p className="text-xs text-slate-600 whitespace-pre-line">{item.cleanContent}</p>
+                        {item.image_url && <img src={item.image_url} alt={item.title} className="max-h-40 rounded-xl border object-contain" />}
                       </div>
                       <button
                         type="button"
@@ -1898,30 +2141,34 @@ export default function App() {
               )}
 
               <div className="space-y-3">
-                {news.map(n => (
-                  <div key={n.id} className="bg-white p-4 rounded-xl border flex justify-between items-start gap-4">
-                    <div className="space-y-2 flex-1">
-                      <div className="font-bold">{n.title}</div>
-                      <p className="text-sm text-slate-600">{n.content}</p>
+                {news.map(n => {
+                  const parsed = parseNewsContent(n.content);
+                  return (
+                    <div key={n.id} className="bg-white p-4 rounded-xl border flex justify-between items-start gap-4">
+                      <div className="space-y-2 flex-1">
+                        <div className="font-bold">{n.title}</div>
+                        <p className="text-sm text-slate-600 whitespace-pre-line">{parsed.content}</p>
+                        {parsed.imageUrl && <img src={parsed.imageUrl} alt={n.title} className="max-h-40 rounded-xl border object-contain" />}
+                        <button
+                          type="button"
+                          onClick={() => handleCopyPostLink('news', n)}
+                          className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 rounded-lg transition"
+                        >
+                          {copiedKey === `news-${n.id}` ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                          {copiedKey === `news-${n.id}` ? 'Đã sao chép link Zalo' : 'Sao chép link gửi Zalo'}
+                        </button>
+                      </div>
                       <button
                         type="button"
-                        onClick={() => handleCopyPostLink('news', n)}
-                        className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 rounded-lg transition"
+                        onClick={() => handleDeleteNewsRow(n.id, n.title)}
+                        className="text-red-500 hover:bg-red-50 p-2 rounded-lg shrink-0"
+                        title="Xóa bài viết"
                       >
-                        {copiedKey === `news-${n.id}` ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                        {copiedKey === `news-${n.id}` ? 'Đã sao chép link Zalo' : 'Sao chép link gửi Zalo'}
+                        <Trash2 className="w-4 h-4" />
                       </button>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => handleDeleteNewsRow(n.id, n.title)}
-                      className="text-red-500 hover:bg-red-50 p-2 rounded-lg shrink-0"
-                      title="Xóa bài viết"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}
@@ -2575,6 +2822,7 @@ export default function App() {
               {filteredFeedbackList.map(fb => {
                 const isSug = isSuggestionRecord(fb);
                 const displayCat = isSug ? fb.category.replace(/^\[GÓP Ý\]\s*/, '') : fb.category;
+                const parsedFeedback = parseFeedbackContent(fb.content);
                 return (
                   <div key={fb.id} className={`bg-white p-5 rounded-2xl border space-y-2 ${isSug ? 'border-l-4 border-l-emerald-600' : 'border-l-4 border-l-amber-500'}`}>
                     <div className="flex flex-wrap justify-between items-center gap-2">
@@ -2590,7 +2838,25 @@ export default function App() {
                         <option value="resolved">Đã phản hồi / Xử lý</option>
                       </select>
                     </div>
-                    <p className="text-slate-800 whitespace-pre-line">{fb.content}</p>
+                    <p className="text-slate-800 whitespace-pre-line">{parsedFeedback.content}</p>
+                    {parsedFeedback.attachments.length > 0 && (
+                      <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 space-y-2">
+                        <div className="text-xs font-bold text-slate-700">Tệp đính kèm</div>
+                        <div className="flex flex-wrap gap-2">
+                          {parsedFeedback.attachments.map((attachment, index) => (
+                            <button
+                              key={`${attachment.path}-${index}`}
+                              type="button"
+                              onClick={() => handleDownloadFeedbackAttachment(attachment)}
+                              className="inline-flex max-w-full items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-emerald-800 hover:bg-emerald-50"
+                            >
+                              <Download className="h-4 w-4 shrink-0" />
+                              <span className="truncate">{attachment.name || 'Tải tệp đính kèm'}</span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                     <div className="text-xs text-slate-600 bg-slate-50 px-3 py-2 rounded-xl border border-slate-100">
                       <strong>Người gửi:</strong> {fb.sender_name || 'Ẩn danh'} • <strong>Liên hệ / Khu vực:</strong> {fb.sender_phone || 'Không cung cấp'} • <span className="text-slate-400">{new Date(fb.created_at).toLocaleString('vi-VN')}</span>
                     </div>
@@ -2937,13 +3203,15 @@ export default function App() {
             <span className="text-[11px] bg-white/15 backdrop-blur-sm px-3 py-1 rounded-full capitalize font-medium">{todayStr}</span>
             <div className="flex flex-wrap items-center justify-end gap-1">
               <button
+                type="button"
                 onClick={requestNotification}
-                className={`px-2.5 py-1.5 rounded-xl text-[11px] font-bold flex items-center gap-1 transition ${
+                aria-label={pushSubscribed ? 'Thông báo đang bật' : 'Bật thông báo'}
+                className={`p-2 rounded-xl transition ${
                   pushSubscribed ? 'bg-white/20 text-white' : 'bg-amber-400 text-emerald-950 hover:bg-amber-300'
                 }`}
-                title="Bật thông báo chuông"
+                title={pushSubscribed ? 'Thông báo đang bật' : 'Bật thông báo'}
               >
-                <Bell className="w-3.5 h-3.5" /> {pushSubscribed ? 'Đã bật chuông' : 'Bật chuông'}
+                <Bell className="w-4 h-4" aria-hidden="true" />
               </button>
               <button
                 type="button"
@@ -3222,6 +3490,7 @@ export default function App() {
                             {n.title}
                           </h3>
                           <p className="text-sm text-slate-600 line-clamp-2 whitespace-pre-line">{n.content}</p>
+                          {n.image_url && <img src={n.image_url} alt={n.title} className="w-full max-h-40 object-contain rounded-xl border border-slate-100 bg-slate-50" />}
                         </div>
                       ))}
                     </>
@@ -3322,6 +3591,11 @@ export default function App() {
                         </div>
                         <h3 className="font-bold text-lg text-slate-800">{n.title}</h3>
                         <p className="text-slate-600 whitespace-pre-line text-sm">{n.content}</p>
+                        {n.image_url && (
+                          <a href={n.image_url} target="_blank" rel="noreferrer" className="block pt-1">
+                            <img src={n.image_url} alt={n.title} className="w-full max-h-96 object-contain rounded-xl border border-slate-100 bg-slate-50" />
+                          </a>
+                        )}
                         {n.video_url && (
                           <a href={n.video_url} target="_blank" rel="noreferrer" className="inline-block text-sm text-sky-700 font-semibold underline">
                             ▶ Xem video hoạt động
@@ -3673,7 +3947,7 @@ export default function App() {
                 {voiceSubTab === 'feedback' && (
                   <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm space-y-4">
                     <h2 className="text-xl font-bold text-slate-800">Gửi Phản ánh & Kiến nghị</h2>
-                    <p className="text-sm text-slate-500">Không cần đăng nhập. Mọi thông tin cá nhân và phản ánh của bà con được bảo mật, chỉ Ban quản trị thôn tiếp nhận xử lý.</p>
+                    <p className="text-sm text-slate-500">Không cần đăng nhập. Nội dung và tệp đính kèm được lưu riêng để Ban quản trị thôn tiếp nhận xử lý.</p>
                     <form onSubmit={handleFeedbackSubmit} className="space-y-3">
                       <div className="grid sm:grid-cols-2 gap-3">
                         <input placeholder="Họ và tên (không bắt buộc)" value={fbForm.sender_name} onChange={e => setFbForm({ ...fbForm, sender_name: e.target.value })} className="border px-4 py-2.5 rounded-xl text-sm" />
@@ -3688,7 +3962,31 @@ export default function App() {
                         <option>Ý kiến kiến nghị khác</option>
                       </select>
                       <textarea required rows={4} placeholder="Nhập nội dung phản ánh hoặc kiến nghị của bà con..." value={fbForm.content} onChange={e => setFbForm({ ...fbForm, content: e.target.value })} className="w-full border px-4 py-2.5 rounded-xl text-sm" />
-                      <button className="w-full bg-amber-600 hover:bg-amber-700 text-white font-semibold py-3 rounded-xl">Gửi phản ánh đến Ban thôn</button>
+                      <div className="space-y-2">
+                        <label htmlFor="feedback-attachments" className="block text-sm font-semibold text-slate-700">Đính kèm ảnh hoặc tệp (không bắt buộc)</label>
+                        <input
+                          id="feedback-attachments"
+                          type="file"
+                          multiple
+                          accept=".jpg,.jpeg,.png,.webp,.gif,.heic,.heif,.pdf,.doc,.docx,.xls,.xlsx,.txt"
+                          onChange={handleFeedbackAttachmentSelection}
+                          className="block w-full text-sm text-slate-700 file:mr-3 file:rounded-lg file:border-0 file:bg-amber-50 file:px-3 file:py-2 file:font-semibold file:text-amber-800 hover:file:bg-amber-100"
+                        />
+                        <p className="text-xs text-slate-500">Tối đa 3 tệp, mỗi tệp không quá 8MB (tổng tối đa 15MB).</p>
+                        {feedbackAttachmentFiles.length > 0 && (
+                          <ul className="space-y-1.5">
+                            {feedbackAttachmentFiles.map((file, index) => (
+                              <li key={`${file.name}-${file.lastModified}-${index}`} className="flex items-center justify-between gap-2 rounded-lg bg-slate-50 px-3 py-2 text-sm">
+                                <span className="truncate">{file.name} <span className="text-xs text-slate-500">({(file.size / (1024 * 1024)).toFixed(1)}MB)</span></span>
+                                <button type="button" onClick={() => setFeedbackAttachmentFiles(files => files.filter((_, fileIndex) => fileIndex !== index))} className="shrink-0 font-semibold text-red-600 hover:underline">Gỡ</button>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                      <button disabled={submittingFeedback} className="w-full bg-amber-600 hover:bg-amber-700 text-white font-semibold py-3 rounded-xl disabled:opacity-60">
+                        {submittingFeedback ? 'Đang gửi phản ánh...' : 'Gửi phản ánh đến Ban thôn'}
+                      </button>
                     </form>
                   </div>
                 )}
