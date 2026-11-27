@@ -54,16 +54,39 @@ const ONESIGNAL_APP_ID =
   (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_ONESIGNAL_APP_ID) ||
   'e21ec54f-f220-4014-a603-d9c0f23977ab';
 
+const CULTURAL_HOUSE_MAP_LINK = 'https://maps.app.goo.gl/QNK6Xvg8FzCNAmgv8?g_st=ic';
+const CULTURAL_HOUSE_MAP_QUERY = 'PXW3+4CH Nhà Văn Hóa Thôn An Sơn, Phường An, Cam Lộ, Quảng Trị';
+const LEGACY_CULTURAL_HOUSE_MAP_QUERY = 'Nhà văn hóa thôn An Sơn, Cam Lộ, Quảng Trị';
+
 const DEFAULT_SETTINGS = {
   village_name: 'THÔN AN SƠN',
   subtitle: 'Xã Cam Lộ – Tỉnh Quảng Trị',
   address: 'Thôn An Sơn, xã Cam Lộ, tỉnh Quảng Trị',
   cultural_house_name: 'Nhà văn hóa thôn An Sơn',
-  cultural_house_query: 'Nhà văn hóa thôn An Sơn, Cam Lộ, Quảng Trị',
-  cultural_house_lat: '16.74527',
-  cultural_house_lng: '106.9635',
+  cultural_house_query: CULTURAL_HOUSE_MAP_QUERY,
+  cultural_house_lat: '',
+  cultural_house_lng: '',
   cultural_house_note: 'Điểm sinh hoạt cộng đồng, hội họp và đón tiếp bà con thôn An Sơn.',
   public_notice: 'Thông tin cộng đồng – Kết nối người dân – Chung tay xây dựng quê hương',
+};
+
+const normalizeCulturalHouseSettings = (settings) => {
+  const query = String(settings?.cultural_house_query || '').trim();
+  const lat = String(settings?.cultural_house_lat || '').trim();
+  const lng = String(settings?.cultural_house_lng || '').trim();
+  const hasLegacyCoordinates = lat === '16.74527' && lng === '106.9635';
+  const hasLegacyQuery = query === LEGACY_CULTURAL_HOUSE_MAP_QUERY;
+
+  if (hasLegacyCoordinates || (hasLegacyQuery && !lat && !lng)) {
+    return {
+      ...settings,
+      cultural_house_query: hasLegacyQuery ? CULTURAL_HOUSE_MAP_QUERY : query,
+      cultural_house_lat: '',
+      cultural_house_lng: '',
+    };
+  }
+
+  return settings;
 };
 
 const QRImage = ({ url, size = 200 }) => {
@@ -130,19 +153,11 @@ const buildCulturalHouseMapUrl = (settings) => {
   if (lat && lng) {
     return `https://maps.google.com/maps?q=${encodeURIComponent(`${lat},${lng}`)}&t=&z=16&ie=UTF8&iwloc=&output=embed`;
   }
-  const query = String(settings?.cultural_house_query || settings?.cultural_house_name || 'Nhà văn hóa thôn An Sơn, Cam Lộ, Quảng Trị').trim();
+  const query = String(settings?.cultural_house_query || settings?.cultural_house_name || CULTURAL_HOUSE_MAP_QUERY).trim();
   return `https://maps.google.com/maps?q=${encodeURIComponent(query)}&t=&z=15&ie=UTF8&iwloc=&output=embed`;
 };
 
-const buildCulturalHouseExternalUrl = (settings) => {
-  const lat = String(settings?.cultural_house_lat || '').trim();
-  const lng = String(settings?.cultural_house_lng || '').trim();
-  if (lat && lng) {
-    return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${lat},${lng}`)}`;
-  }
-  const query = String(settings?.cultural_house_query || settings?.cultural_house_name || 'Nhà văn hóa thôn An Sơn Cam Lộ Quảng Trị').trim();
-  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
-};
+const buildCulturalHouseExternalUrl = () => CULTURAL_HOUSE_MAP_LINK;
 
 const isSuggestionRecord = (fb) => String(fb?.category || '').startsWith('[GÓP Ý]');
 
@@ -421,7 +436,7 @@ export default function App() {
     if (typeof window === 'undefined') return DEFAULT_SETTINGS;
     try {
       const saved = localStorage.getItem(SETTINGS_STORAGE_KEY);
-      return saved ? { ...DEFAULT_SETTINGS, ...JSON.parse(saved) } : DEFAULT_SETTINGS;
+      return saved ? normalizeCulturalHouseSettings({ ...DEFAULT_SETTINGS, ...JSON.parse(saved) }) : DEFAULT_SETTINGS;
     } catch (_e) {
       return DEFAULT_SETTINGS;
     }
@@ -1099,7 +1114,7 @@ export default function App() {
       if (cl.data) setCustomLists(cl.data);
       if (ci.data) setCustomItems(ci.data);
       if (s && !s.error && Array.isArray(s.data) && s.data[0]) {
-        const merged = { ...DEFAULT_SETTINGS, ...s.data[0] };
+        const merged = normalizeCulturalHouseSettings({ ...DEFAULT_SETTINGS, ...s.data[0] });
         setAppSettings(merged);
         setSettingsForm(merged);
         if (typeof window !== 'undefined') {
@@ -1982,7 +1997,7 @@ export default function App() {
   const todayStr = new Date().toLocaleDateString('vi-VN', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'Asia/Ho_Chi_Minh' });
   const galleryItems = publishedAnnouncements.filter(a => a.image_url);
   const culturalHouseMapSrc = buildCulturalHouseMapUrl(appSettings);
-  const culturalHouseExternalUrl = buildCulturalHouseExternalUrl(appSettings);
+  const culturalHouseExternalUrl = buildCulturalHouseExternalUrl();
 
   // ==================== ADMIN VIEW ====================
   if (mode === 'admin') {
