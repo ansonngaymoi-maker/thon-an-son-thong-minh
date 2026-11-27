@@ -3,14 +3,15 @@ import {
   Bell, Home, Newspaper, Users, Calendar, MessageSquare, QrCode,
   Shield, Phone, MapPin, Plus, Trash2, LogOut, Search,
   CheckCircle, AlertTriangle, Download, Printer, ListPlus,
-  Home as HomeIcon, Lock, RefreshCw, ChevronRight, X,
+  Home as HomeIcon, Lock, RefreshCw, ChevronRight, ChevronLeft, X,
   Image as ImageIcon, Map, PhoneCall, ExternalLink, Copy, Check, ArrowDown,
   Settings, FileSpreadsheet, Upload, Lightbulb, HeartHandshake, Pencil, Wallet,
-  Sparkles, Compass, Clock
+  Sparkles, Compass, Clock, BookOpen
 } from 'lucide-react';
 import { supabase, isConfigured } from './supabaseClient';
 
-const APP_VERSION = 'v1.6.5';
+const APP_VERSION = 'v1.6.6';
+const PUBLIC_PAGE_SIZE = 6;
 const SEEN_IDS_KEY = 'thon_an_son_seen_post_ids_v1';
 const SETTINGS_STORAGE_KEY = 'thon_an_son_app_settings_v1';
 const FONT_SIZE_STORAGE_KEY = 'thon_an_son_font_size_v1';
@@ -68,6 +69,39 @@ const DEFAULT_SETTINGS = {
 const QRImage = ({ url, size = 200 }) => {
   const src = `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encodeURIComponent(url)}`;
   return <img src={src} alt="Mã QR Thôn An Sơn" width={size} height={size} className="rounded-xl border border-slate-200 bg-white p-2 mx-auto" />;
+};
+
+const PaginationControls = ({ currentPage, totalItems, pageSize = PUBLIC_PAGE_SIZE, onPageChange }) => {
+  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+  if (totalItems <= pageSize) return null;
+  const safePage = Math.min(Math.max(1, currentPage), totalPages);
+  const startItem = (safePage - 1) * pageSize + 1;
+  const endItem = Math.min(totalItems, safePage * pageSize);
+
+  return (
+    <div className="bg-white px-3.5 py-2.5 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between gap-2">
+      <button
+        type="button"
+        disabled={safePage <= 1}
+        onClick={() => onPageChange(safePage - 1)}
+        className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-bold border border-slate-200 text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:pointer-events-none transition"
+      >
+        <ChevronLeft className="w-4 h-4" /> Trước
+      </button>
+      <div className="text-center">
+        <span className="text-xs font-extrabold text-emerald-800">Trang {safePage}/{totalPages}</span>
+        <span className="block text-[11px] text-slate-400">Hiển thị {startItem}–{endItem} / {totalItems}</span>
+      </div>
+      <button
+        type="button"
+        disabled={safePage >= totalPages}
+        onClick={() => onPageChange(safePage + 1)}
+        className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-bold border border-slate-200 text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:pointer-events-none transition"
+      >
+        Sau <ChevronRight className="w-4 h-4" />
+      </button>
+    </div>
+  );
 };
 
 const loadXlsxLibrary = () => {
@@ -408,6 +442,7 @@ export default function App() {
   const [feedbacks, setFeedbacks] = useState([]);
   const [feedbackFilter, setFeedbackFilter] = useState('all');
   const [showResolvedFeedback, setShowResolvedFeedback] = useState(false);
+  const [deletingFeedbackId, setDeletingFeedbackId] = useState(null);
   const [households, setHouseholds] = useState([]);
   const [residents, setResidents] = useState([]);
 
@@ -446,10 +481,19 @@ export default function App() {
   const [searchOfficial, setSearchOfficial] = useState('');
   const [searchHousehold, setSearchHousehold] = useState('');
   const [showQRModal, setShowQRModal] = useState(false);
+  const [detailModalPost, setDetailModalPost] = useState(null);
   const [toast, setToast] = useState('');
   const [copiedKey, setCopiedKey] = useState('');
   const [highlightedPost, setHighlightedPost] = useState('');
   const [pushSubscribed, setPushSubscribed] = useState(false);
+
+  // Pagination states
+  const [homeAnnPage, setHomeAnnPage] = useState(1);
+  const [homeNewsPage, setHomeNewsPage] = useState(1);
+  const [feedAnnPage, setFeedAnnPage] = useState(1);
+  const [feedNewsPage, setFeedNewsPage] = useState(1);
+  const [financeDonPage, setFinanceDonPage] = useState(1);
+  const [financeLedgerPage, setFinanceLedgerPage] = useState(1);
 
   // Pull-to-refresh states
   const [pullDistance, setPullDistance] = useState(0);
@@ -458,8 +502,9 @@ export default function App() {
   const isPullingRef = useRef(false);
 
   const hasInitializedFeedRef = useRef(false);
+  const pendingUrlPostRef = useRef('');
 
-  // Schedule toggles (mặc định KHÔNG tích = đăng ngay, bật tích mới hiện ngày giờ hẹn)
+  // Schedule toggles
   const defaultLater = getVietnamDateTimeInputs(5);
   const [annImageFile, setAnnImageFile] = useState(null);
   const [annImagePreview, setAnnImagePreview] = useState('');
@@ -521,9 +566,52 @@ export default function App() {
     }
   }, [largeText]);
 
+  useEffect(() => {
+    setFinanceDonPage(1);
+    setFinanceLedgerPage(1);
+  }, [searchFinance, financePublicSubTab]);
+
   const showToast = (msg, duration = 5000) => {
     setToast(msg);
     setTimeout(() => setToast(''), duration);
+  };
+
+  const openAnnouncementDetail = (a) => {
+    if (!a) return;
+    setDetailModalPost({
+      kind: 'announcement',
+      id: a.id,
+      shareType: 'announcements',
+      shareItem: a,
+      badge: a.priority === 'urgent' ? 'Thông báo khẩn cấp' : a.priority === 'important' ? 'Thông báo quan trọng' : 'Thông báo thôn',
+      isPinned: Boolean(a.is_pinned),
+      priority: a.priority || 'normal',
+      title: a.title,
+      content: a.cleanContent ?? a.content,
+      imageUrl: a.image_url || '',
+      videoUrl: '',
+      createdAt: a.created_at,
+    });
+  };
+
+  const openNewsDetail = (n) => {
+    if (!n) return;
+    const shareTargetId = n.sourceAnnId || n.id;
+    const shareType = n.sourceAnnId ? 'announcements' : 'news';
+    setDetailModalPost({
+      kind: 'news',
+      id: n.id,
+      shareType,
+      shareItem: { ...n, id: shareTargetId },
+      badge: n.category || 'Tin tức hoạt động',
+      isPinned: false,
+      priority: 'normal',
+      title: n.title,
+      content: n.content,
+      imageUrl: n.image_url || '',
+      videoUrl: n.video_url || '',
+      createdAt: n.created_at,
+    });
   };
 
   const handleDeleteAnnouncementRow = async (id, title = '') => {
@@ -550,11 +638,47 @@ export default function App() {
     showToast('Đã xóa bài viết!');
   };
 
+  const handleDeleteFeedback = async (fb) => {
+    if (!fb?.id || deletingFeedbackId) return;
+    const isSug = isSuggestionRecord(fb);
+    const label = isSug ? 'góp ý' : 'phản ánh';
+    const sender = fb.sender_name || 'người dân';
+    if (!confirm(`Xác nhận xóa ${label} của "${sender}"? Thao tác này không thể hoàn tác.`)) return;
+
+    setDeletingFeedbackId(fb.id);
+    try {
+      const parsed = parseFeedbackContent(fb.content);
+      const attachmentPaths = (parsed.attachments || [])
+        .map((att) => att?.path)
+        .filter(Boolean);
+
+      if (attachmentPaths.length > 0) {
+        const { error: storageErr } = await supabase.storage
+          .from(FEEDBACK_ATTACHMENT_BUCKET)
+          .remove(attachmentPaths);
+        if (storageErr) {
+          showToast('Cảnh báo: Không xóa được tệp đính kèm trên Storage (' + storageErr.message + '), vẫn xóa bản ghi.', 5000);
+        }
+      }
+
+      const { error } = await supabase.from('feedbacks').delete().eq('id', fb.id);
+      if (error) {
+        showToast('Lỗi xóa ' + label + ': ' + error.message);
+        return;
+      }
+      await fetchAdminData();
+      showToast(`Đã xóa ${label} thành công!`);
+    } finally {
+      setDeletingFeedbackId(null);
+    }
+  };
+
   const goHomePublic = () => {
     setMode('public');
     setTab('home');
     setHighlightedPost('');
     setQuickSearch('');
+    setDetailModalPost(null);
     if (typeof window !== 'undefined') {
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
@@ -750,8 +874,38 @@ export default function App() {
     setTab('feed');
     if (postKey.startsWith('announcements-')) {
       setFeedSubTab('announcements');
+      const targetId = postKey.slice('announcements-'.length);
+      const foundAnn = announcements.find((item) => String(item.id) === String(targetId));
+      if (foundAnn) {
+        const parsed = parseScheduledItem(foundAnn.content);
+        if (parsed.isNewsPost) {
+          const parsedNews = parseNewsContent(parsed.cleanContent);
+          openNewsDetail({
+            id: `sch-${foundAnn.id}`,
+            sourceAnnId: foundAnn.id,
+            title: foundAnn.title,
+            content: parsedNews.content,
+            image_url: foundAnn.image_url || parsedNews.imageUrl,
+            category: 'Tin tức hẹn giờ',
+            created_at: foundAnn.created_at,
+            video_url: '',
+          });
+        } else {
+          openAnnouncementDetail({ ...foundAnn, cleanContent: parsed.cleanContent });
+        }
+      } else {
+        pendingUrlPostRef.current = postKey;
+      }
     } else if (postKey.startsWith('news-')) {
       setFeedSubTab('news');
+      const targetId = postKey.slice('news-'.length);
+      const foundNews = news.find((item) => String(item.id) === String(targetId));
+      if (foundNews) {
+        const parsed = parseNewsContent(foundNews.content);
+        openNewsDetail({ ...foundNews, content: parsed.content, image_url: parsed.imageUrl });
+      } else {
+        pendingUrlPostRef.current = postKey;
+      }
     } else if (postKey.startsWith('events-')) {
       setFeedSubTab('events');
     } else {
@@ -791,9 +945,22 @@ export default function App() {
     const params = new URLSearchParams(window.location.search);
     const postParam = params.get('post');
     if (postParam) {
+      pendingUrlPostRef.current = postParam;
       openPostFromKey(postParam);
     }
   }, []);
+
+  useEffect(() => {
+    if (!pendingUrlPostRef.current) return;
+    const key = pendingUrlPostRef.current;
+    if (key.startsWith('announcements-') && announcements.length > 0) {
+      pendingUrlPostRef.current = '';
+      openPostFromKey(key);
+    } else if (key.startsWith('news-') && news.length > 0) {
+      pendingUrlPostRef.current = '';
+      openPostFromKey(key);
+    }
+  }, [announcements, news]);
 
   useEffect(() => {
     if (!isConfigured) {
@@ -965,7 +1132,6 @@ export default function App() {
     await fetchAdminData();
     showToast('Đã cập nhật trạng thái');
   };
-
   const ensureSystemFinanceList = async (marker, title) => {
     const existing = customLists.find((l) => l.description === marker);
     if (existing) return existing.id;
@@ -1776,7 +1942,7 @@ export default function App() {
 
   const donationItems = (donationSystemList
     ? customItems.filter((i) => i.list_id === donationSystemList.id)
-                         : []
+    : []
   ).map((item) => {
     const meta = decodeMeta(item.notes, { amount: parseMoneyAmount(item.phone), in_kind: '', date: '', note: '' });
     return {
@@ -1980,7 +2146,7 @@ export default function App() {
               <div className="bg-white p-6 rounded-2xl border shadow-sm space-y-2">
                 <h3 className="font-bold text-slate-800">Trạng thái bảo mật & Thông báo đẩy ({APP_VERSION})</h3>
                 <p className="text-sm text-emerald-700 flex items-center gap-2"><CheckCircle className="w-4 h-4 shrink-0" /> Đã kết nối cơ sở dữ liệu Supabase thời gian thực.</p>
-                <p className="text-sm text-emerald-700 flex items-center gap-2"><CheckCircle className="w-4 h-4 shrink-0" /> Đã có nút Xóa trực tiếp cho toàn bộ tin tức hẹn giờ và thông báo chờ đăng.</p>
+                <p className="text-sm text-emerald-700 flex items-center gap-2"><CheckCircle className="w-4 h-4 shrink-0" /> Có giao diện đọc chi tiết, phân trang và xóa phản ánh/góp ý kèm tệp đính kèm.</p>
               </div>
             </div>
           )}
@@ -2874,6 +3040,7 @@ export default function App() {
                 const isSug = isSuggestionRecord(fb);
                 const displayCat = isSug ? fb.category.replace(/^\[GÓP Ý\]\s*/, '') : fb.category;
                 const parsedFeedback = parseFeedbackContent(fb.content);
+                const isDeletingThis = deletingFeedbackId === fb.id;
                 return (
                   <div key={fb.id} className={`bg-white p-5 rounded-2xl border space-y-2 ${isSug ? 'border-l-4 border-l-emerald-600' : 'border-l-4 border-l-amber-500'}`}>
                     <div className="flex flex-wrap justify-between items-center gap-2">
@@ -2883,11 +3050,23 @@ export default function App() {
                         </span>
                         <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-700">{displayCat}</span>
                       </div>
-                      <select value={fb.status} onChange={(e) => handleFeedbackStatusChange(fb.id, e.target.value)} className="border rounded-lg px-2 py-1 text-xs">
-                        <option value="received">Đã tiếp nhận</option>
-                        <option value="reviewing">Đang xem xét</option>
-                        <option value="resolved">Đã phản hồi / Xử lý</option>
-                      </select>
+                      <div className="flex items-center gap-2">
+                        <select value={fb.status} onChange={(e) => handleFeedbackStatusChange(fb.id, e.target.value)} className="border rounded-lg px-2 py-1 text-xs">
+                          <option value="received">Đã tiếp nhận</option>
+                          <option value="reviewing">Đang xem xét</option>
+                          <option value="resolved">Đã phản hồi / Xử lý</option>
+                        </select>
+                        <button
+                          type="button"
+                          disabled={isDeletingThis}
+                          onClick={() => handleDeleteFeedback(fb)}
+                          className="inline-flex items-center gap-1 text-xs font-bold text-red-600 hover:bg-red-50 border border-red-200 px-2.5 py-1 rounded-lg transition disabled:opacity-50"
+                          title={isSug ? 'Xóa góp ý này' : 'Xóa phản ánh này'}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          {isDeletingThis ? 'Đang xóa...' : 'Xóa'}
+                        </button>
+                      </div>
                     </div>
                     <p className="text-slate-800 whitespace-pre-line">{parsedFeedback.content}</p>
                     {parsedFeedback.attachments.length > 0 && (
@@ -3137,7 +3316,7 @@ export default function App() {
                 <div className="flex items-center justify-between">
                   <div>
                     <div className="font-bold text-lg">Phiên bản hiện tại: {APP_VERSION}</div>
-                    <p className="text-sm text-slate-500">Có nút xóa trực tiếp cho các mục hẹn giờ tin tức/thông báo, chuẩn giờ Việt Nam (GMT+7).</p>
+                    <p className="text-sm text-slate-500">Nâng cấp giao diện đọc chi tiết bài viết, phân trang danh sách và xóa phản ánh/góp ý kèm tệp đính kèm.</p>
                   </div>
                   <button onClick={() => window.location.reload()} className="bg-slate-100 hover:bg-slate-200 px-4 py-2 rounded-xl text-sm font-medium flex items-center gap-2"><RefreshCw className="w-4 h-4" /> Kiểm tra cập nhật</button>
                 </div>
@@ -3153,7 +3332,6 @@ export default function App() {
       </div>
     );
   }
-
   // ==================== SMART PUBLIC RESIDENT VIEW ====================
   const smartHubs = [
     {
@@ -3221,6 +3399,21 @@ export default function App() {
   const filteredLedgerPublic = ledgerItems.filter((l) =>
     `${l.name} ${l.detail} ${l.note}`.toLowerCase().includes(searchFinance.toLowerCase())
   );
+
+  // Tính lát cắt phân trang (Pagination slices)
+  const paginateSlice = (list, page, size = PUBLIC_PAGE_SIZE) => {
+    const totalPages = Math.max(1, Math.ceil(list.length / size));
+    const safePage = Math.min(Math.max(1, page), totalPages);
+    const start = (safePage - 1) * size;
+    return list.slice(start, start + size);
+  };
+
+  const pagedHomeAnnouncements = paginateSlice(publishedAnnouncements, homeAnnPage, 4);
+  const pagedHomeNews = paginateSlice(allPublishedNews, homeNewsPage, 4);
+  const pagedFeedAnnouncements = paginateSlice(publishedAnnouncements, feedAnnPage, PUBLIC_PAGE_SIZE);
+  const pagedFeedNews = paginateSlice(allPublishedNews, feedNewsPage, PUBLIC_PAGE_SIZE);
+  const pagedDonationsPublic = paginateSlice(filteredDonationsPublic, financeDonPage, PUBLIC_PAGE_SIZE);
+  const pagedLedgerPublic = paginateSlice(filteredLedgerPublic, financeLedgerPage, PUBLIC_PAGE_SIZE);
 
   return (
     <div className="min-h-screen bg-[#f3f6f4] pb-24">
@@ -3296,7 +3489,7 @@ export default function App() {
             type="button"
             onClick={goHomePublic}
             className="flex items-center gap-3 text-left group cursor-pointer active:scale-[0.99] transition"
-            title="Bấm vào ngôi nhà để quay về Trang chủ"
+            title="Bấm vào logo để quay về Trang chủ"
           >
             <img src="/logo.png" alt="Logo Thôn An Sơn" className="w-12 h-12 rounded-full shadow-md bg-white p-0.5 group-hover:bg-white/90 transition" />
             <div>
@@ -3346,7 +3539,7 @@ export default function App() {
                   <button
                     key={`qa-${a.id}`}
                     type="button"
-                    onClick={() => openPostFromKey(`announcements-${a.id}`)}
+                    onClick={() => openAnnouncementDetail(a)}
                     className="w-full bg-white p-4 rounded-2xl border-l-4 border-l-emerald-600 border border-slate-100 text-left shadow-sm space-y-1"
                   >
                     <div className="text-[11px] font-bold text-emerald-700">THÔNG BÁO • {new Date(a.created_at).toLocaleDateString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })}</div>
@@ -3358,7 +3551,7 @@ export default function App() {
                   <button
                     key={`qn-${n.id}`}
                     type="button"
-                    onClick={() => openPostFromKey(`news-${n.id}`)}
+                    onClick={() => openNewsDetail(n)}
                     className="w-full bg-white p-4 rounded-2xl border-l-4 border-l-teal-600 border border-slate-100 text-left shadow-sm space-y-1"
                   >
                     <div className="text-[11px] font-bold text-teal-700">TIN TỨC • {n.category}</div>
@@ -3459,13 +3652,13 @@ export default function App() {
                 <section className="space-y-3">
                   <div className="flex justify-between items-center px-1">
                     <h2 className="text-xs font-extrabold uppercase tracking-wider text-emerald-800 flex items-center gap-1.5">
-                      <Sparkles className="w-4 h-4 text-amber-500" /> Thông báo & Tin tức nổi bật
+                      <Sparkles className="w-4 h-4 text-amber-500" /> Thông báo thôn ({publishedAnnouncements.length})
                     </h2>
                     <button
-                      onClick={() => navigatePublic('feed', 'all')}
+                      onClick={() => navigatePublic('feed', 'announcements')}
                       className="text-xs text-emerald-700 font-bold flex items-center hover:underline"
                     >
-                      Xem tất cả ({publishedAnnouncements.length + allPublishedNews.length}) <ChevronRight className="w-4 h-4" />
+                      Bảng tin tổng hợp <ChevronRight className="w-4 h-4" />
                     </button>
                   </div>
 
@@ -3478,7 +3671,7 @@ export default function App() {
                     </div>
                   ) : (
                     <>
-                      {publishedAnnouncements.slice(0, 4).map((a) => (
+                      {pagedHomeAnnouncements.map((a) => (
                         <div key={a.id} className="bg-white p-4 rounded-2xl border-l-4 border-l-emerald-600 border border-slate-100 shadow-sm space-y-2">
                           <div className="flex items-center gap-2">
                             {a.is_pinned && <span className="text-[11px] bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full font-bold">📌 Ghim</span>}
@@ -3487,38 +3680,43 @@ export default function App() {
                             <span className="text-[11px] text-slate-400 ml-auto">{new Date(a.created_at).toLocaleDateString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })}</span>
                           </div>
                           <h3
-                            onClick={() => openPostFromKey(`announcements-${a.id}`)}
+                            onClick={() => openAnnouncementDetail(a)}
                             className="font-bold text-slate-800 text-base leading-snug cursor-pointer hover:text-emerald-700"
                           >
                             {a.title}
                           </h3>
-                          <p className="text-sm text-slate-600 line-clamp-3 whitespace-pre-line">{a.cleanContent}</p>
+                          <p
+                            onClick={() => openAnnouncementDetail(a)}
+                            className="text-sm text-slate-600 line-clamp-3 whitespace-pre-line cursor-pointer"
+                          >
+                            {a.cleanContent}
+                          </p>
                           {a.image_url && (
-                            <a href={a.image_url} target="_blank" rel="noreferrer" className="block pt-1">
+                            <button type="button" onClick={() => openAnnouncementDetail(a)} className="block w-full pt-1 text-left">
                               <img src={a.image_url} alt={a.title} className="w-full max-h-64 object-contain rounded-xl border border-slate-100 bg-slate-50" />
-                            </a>
+                            </button>
                           )}
                           <div className="pt-1 flex items-center justify-between gap-2">
                             <button
                               type="button"
-                              onClick={() => openPostFromKey(`announcements-${a.id}`)}
-                              className="text-xs font-bold text-slate-500 hover:text-emerald-700"
+                              onClick={() => openAnnouncementDetail(a)}
+                              className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-800 bg-emerald-50/80 hover:bg-emerald-100 px-3 py-1.5 rounded-xl transition"
                             >
-                              Đọc chi tiết →
+                              <BookOpen className="w-3.5 h-3.5" /> Đọc chi tiết
                             </button>
                             <button
                               type="button"
                               onClick={() => handleCopyPostLink('announcements', a)}
-                              className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 rounded-xl transition"
+                              className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded-xl transition"
                             >
-                              {copiedKey === `announcements-${a.id}` ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                              {copiedKey === `announcements-${a.id}` ? <Check className="w-3.5 h-3.5 text-emerald-700" /> : <Copy className="w-3.5 h-3.5" />}
                               {copiedKey === `announcements-${a.id}` ? 'Đã sao chép' : 'Gửi Zalo'}
                             </button>
                           </div>
                         </div>
                       ))}
 
-                      {homeNewsItems.map((n, index) => {
+                      {allPublishedNews.slice(0, showAllHomeNews ? allPublishedNews.length : 1).map((n, index) => {
                         const isFirstNewsToggle = index === 0 && allPublishedNews.length > 1;
                         return (
                           <div key={n.id} className="bg-white p-4 rounded-2xl border-l-4 border-l-teal-500 border border-slate-100 shadow-sm space-y-2">
@@ -3541,14 +3739,7 @@ export default function App() {
                             <h3 className="font-bold text-slate-800 text-base leading-snug">
                               <button
                                 type="button"
-                                onClick={() => {
-                                  if (isFirstNewsToggle) {
-                                    if (!showAllHomeNews) setHomeNewsSectionIndex(0);
-                                    setShowAllHomeNews(value => !value);
-                                  } else {
-                                    navigatePublic('feed', 'news');
-                                  }
-                                }}
+                                onClick={() => isFirstNewsToggle ? setShowAllHomeNews(value => !value) : navigatePublic('feed', 'news')}
                                 aria-expanded={isFirstNewsToggle ? showAllHomeNews : undefined}
                                 title={isFirstNewsToggle ? (showAllHomeNews ? 'Bấm để thu gọn danh sách tin tức' : 'Bấm để xem tất cả tin tức') : 'Mở mục tin tức'}
                                 className="flex w-full items-center justify-between gap-2 text-left hover:text-emerald-700"
@@ -3566,14 +3757,6 @@ export default function App() {
                           </div>
                         );
                       })}
-                      {showAllHomeNews && (
-                        <NewsSectionControls
-                          sectionIndex={safeHomeNewsSectionIndex}
-                          totalItems={allPublishedNews.length}
-                          onPrevious={() => setHomeNewsSectionIndex(index => Math.max(0, index - 1))}
-                          onNext={() => setHomeNewsSectionIndex(index => Math.min(lastNewsSectionIndex, index + 1))}
-                        />
-                      )}
                     </>
                   )}
                 </section>
@@ -3615,7 +3798,7 @@ export default function App() {
                     {publishedAnnouncements.length === 0 && feedSubTab === 'announcements' && (
                       <p className="text-slate-500 text-sm">Chưa có thông báo nào.</p>
                     )}
-                    {publishedAnnouncements.map((a) => {
+                    {pagedFeedAnnouncements.map((a) => {
                       const postKey = `announcements-${a.id}`;
                       const isHighlighted = highlightedPost === postKey;
                       return (
@@ -3630,26 +3813,50 @@ export default function App() {
                             <span className="font-bold text-emerald-700">Thông báo</span>
                             <span>• {a.is_pinned ? '📌 Đã ghim • ' : ''}{new Date(a.created_at).toLocaleDateString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })}</span>
                           </div>
-                          <h3 className="font-bold text-lg text-slate-800">{a.title}</h3>
-                          <p className="text-slate-600 whitespace-pre-line text-sm">{a.cleanContent}</p>
+                          <h3
+                            onClick={() => openAnnouncementDetail(a)}
+                            className="font-bold text-lg text-slate-800 cursor-pointer hover:text-emerald-700"
+                          >
+                            {a.title}
+                          </h3>
+                          <p
+                            onClick={() => openAnnouncementDetail(a)}
+                            className="text-slate-600 whitespace-pre-line text-sm line-clamp-4 cursor-pointer"
+                          >
+                            {a.cleanContent}
+                          </p>
                           {a.image_url && (
-                            <a href={a.image_url} target="_blank" rel="noreferrer" className="block pt-1">
+                            <button type="button" onClick={() => openAnnouncementDetail(a)} className="block w-full pt-1 text-left">
                               <img src={a.image_url} alt={a.title} className="w-full max-h-96 object-contain rounded-xl border border-slate-100 bg-slate-50" />
-                            </a>
+                            </button>
                           )}
-                          <div className="pt-2 flex justify-end">
+                          <div className="pt-2 flex items-center justify-between gap-2">
+                            <button
+                              type="button"
+                              onClick={() => openAnnouncementDetail(a)}
+                              className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 px-3.5 py-2 rounded-xl transition"
+                            >
+                              <BookOpen className="w-4 h-4" /> Đọc chi tiết
+                            </button>
                             <button
                               type="button"
                               onClick={() => handleCopyPostLink('announcements', a)}
-                              className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-3.5 py-2 rounded-xl transition"
+                              className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 px-3.5 py-2 rounded-xl transition"
                             >
-                              {copiedKey === postKey ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                              {copiedKey === postKey ? <Check className="w-4 h-4 text-emerald-700" /> : <Copy className="w-4 h-4" />}
                               {copiedKey === postKey ? 'Đã sao chép link Zalo' : 'Sao chép link gửi Zalo'}
                             </button>
                           </div>
                         </div>
                       );
                     })}
+
+                    <PaginationControls
+                      currentPage={feedAnnPage}
+                      totalItems={publishedAnnouncements.length}
+                      pageSize={PUBLIC_PAGE_SIZE}
+                      onPageChange={setFeedAnnPage}
+                    />
                   </div>
                 )}
 
@@ -3658,15 +3865,7 @@ export default function App() {
                     {allPublishedNews.length === 0 && feedSubTab === 'news' && (
                       <p className="text-slate-500 text-sm">Chưa có bài viết nào.</p>
                     )}
-                    {allPublishedNews.length > 0 && (
-                      <NewsSectionControls
-                        sectionIndex={safeFeedNewsSectionIndex}
-                        totalItems={allPublishedNews.length}
-                        onPrevious={() => setFeedNewsSectionIndex(index => Math.max(0, index - 1))}
-                        onNext={() => setFeedNewsSectionIndex(index => Math.min(lastNewsSectionIndex, index + 1))}
-                      />
-                    )}
-                    {feedNewsItems.map((n) => (
+                    {allPublishedNews.map((n) => (
                       <div key={n.id} className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-2">
                         <div className="flex items-center justify-between gap-2">
                           <span className="text-xs bg-teal-100 text-teal-800 px-2.5 py-0.5 rounded-full font-medium">{n.category}</span>
@@ -3744,13 +3943,18 @@ export default function App() {
                     ) : (
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         {galleryItems.map((item) => (
-                          <a key={item.id} href={item.image_url} target="_blank" rel="noreferrer" className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden group">
+                          <button
+                            key={item.id}
+                            type="button"
+                            onClick={() => openAnnouncementDetail(item)}
+                            className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden group text-left"
+                          >
                             <img src={item.image_url} alt={item.title} className="w-full h-52 object-cover group-hover:scale-[1.02] transition" />
                             <div className="p-3">
                               <div className="font-bold text-sm text-slate-800 line-clamp-1">{item.title}</div>
                               <div className="text-[11px] text-slate-400 mt-0.5">{new Date(item.created_at).toLocaleDateString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })}</div>
                             </div>
-                          </a>
+                          </button>
                         ))}
                       </div>
                     )}
@@ -3824,24 +4028,36 @@ export default function App() {
                         Chưa có danh sách ủng hộ nào được đăng tải.
                       </div>
                     ) : (
-                      filteredDonationsPublic.map((d, idx) => (
-                        <div key={d.id} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm flex justify-between items-start gap-3">
-                          <div className="space-y-1">
-                            <div className="flex items-center gap-2">
-                              <span className="text-[11px] font-bold bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full">#{idx + 1}</span>
-                              <span className="font-bold text-slate-800">{d.name}</span>
-                              {d.role_or_group && <span className="text-xs text-slate-500">({d.role_or_group})</span>}
+                      <>
+                        {pagedDonationsPublic.map((d, idx) => {
+                          const globalIndex = (Math.min(Math.max(1, financeDonPage), Math.max(1, Math.ceil(filteredDonationsPublic.length / PUBLIC_PAGE_SIZE))) - 1) * PUBLIC_PAGE_SIZE + idx + 1;
+                          return (
+                            <div key={d.id} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm flex justify-between items-start gap-3">
+                              <div className="space-y-1">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-[11px] font-bold bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full">#{globalIndex}</span>
+                                  <span className="font-bold text-slate-800">{d.name}</span>
+                                  {d.role_or_group && <span className="text-xs text-slate-500">({d.role_or_group})</span>}
+                                </div>
+                                <div className="text-xs text-slate-600">{d.detail}</div>
+                                {d.note && <div className="text-xs text-slate-500 italic">{d.note}</div>}
+                                <div className="text-[11px] text-slate-400">Ngày ghi nhận: {d.date}</div>
+                              </div>
+                              <div className="text-right shrink-0">
+                                {d.amount > 0 && <div className="font-extrabold text-emerald-700 text-sm sm:text-base">{formatVND(d.amount)}</div>}
+                                {d.in_kind && <div className="text-xs font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-lg mt-1">{d.in_kind}</div>}
+                              </div>
                             </div>
-                            <div className="text-xs text-slate-600">{d.detail}</div>
-                            {d.note && <div className="text-xs text-slate-500 italic">{d.note}</div>}
-                            <div className="text-[11px] text-slate-400">Ngày ghi nhận: {d.date}</div>
-                          </div>
-                          <div className="text-right shrink-0">
-                            {d.amount > 0 && <div className="font-extrabold text-emerald-700 text-sm sm:text-base">{formatVND(d.amount)}</div>}
-                            {d.in_kind && <div className="text-xs font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-lg mt-1">{d.in_kind}</div>}
-                          </div>
-                        </div>
-                      ))
+                          );
+                        })}
+
+                        <PaginationControls
+                          currentPage={financeDonPage}
+                          totalItems={filteredDonationsPublic.length}
+                          pageSize={PUBLIC_PAGE_SIZE}
+                          onPageChange={setFinanceDonPage}
+                        />
+                      </>
                     )}
                   </div>
                 )}
@@ -3853,24 +4069,33 @@ export default function App() {
                         Chưa có khoản thu – chi nào được công khai.
                       </div>
                     ) : (
-                      filteredLedgerPublic.map((l) => (
-                        <div key={l.id} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm flex justify-between items-start gap-3">
-                          <div className="space-y-1">
-                            <div className="flex items-center gap-2">
-                              <span className={`text-[11px] font-extrabold px-2.5 py-0.5 rounded-full ${l.entryType === 'chi' ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-800'}`}>
-                                {l.entryType === 'chi' ? 'CHI' : 'THU'}
-                              </span>
-                              <span className="font-bold text-slate-800 text-sm">{l.name}</span>
+                      <>
+                        {pagedLedgerPublic.map((l) => (
+                          <div key={l.id} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm flex justify-between items-start gap-3">
+                            <div className="space-y-1">
+                              <div className="flex items-center gap-2">
+                                <span className={`text-[11px] font-extrabold px-2.5 py-0.5 rounded-full ${l.entryType === 'chi' ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-800'}`}>
+                                  {l.entryType === 'chi' ? 'CHI' : 'THU'}
+                                </span>
+                                <span className="font-bold text-slate-800 text-sm">{l.name}</span>
+                              </div>
+                              <div className="text-xs text-slate-600">{l.detail}</div>
+                              {l.note && <div className="text-xs text-slate-500 italic">{l.note}</div>}
+                              <div className="text-[11px] text-slate-400">Ngày: {l.date}</div>
                             </div>
-                            <div className="text-xs text-slate-600">{l.detail}</div>
-                            {l.note && <div className="text-xs text-slate-500 italic">{l.note}</div>}
-                            <div className="text-[11px] text-slate-400">Ngày: {l.date}</div>
+                            <div className={`font-extrabold text-sm sm:text-base shrink-0 ${l.entryType === 'chi' ? 'text-rose-700' : 'text-emerald-700'}`}>
+                              {l.entryType === 'chi' ? '-' : '+'}{formatVND(l.amount)}
+                            </div>
                           </div>
-                          <div className={`font-extrabold text-sm sm:text-base shrink-0 ${l.entryType === 'chi' ? 'text-rose-700' : 'text-emerald-700'}`}>
-                            {l.entryType === 'chi' ? '-' : '+'}{formatVND(l.amount)}
-                          </div>
-                        </div>
-                      ))
+                        ))}
+
+                        <PaginationControls
+                          currentPage={financeLedgerPage}
+                          totalItems={filteredLedgerPublic.length}
+                          pageSize={PUBLIC_PAGE_SIZE}
+                          onPageChange={setFinanceLedgerPage}
+                        />
+                      </>
                     )}
                   </div>
                 )}
@@ -4195,6 +4420,123 @@ export default function App() {
           );
         })}
       </nav>
+
+      {/* Modal đọc chi tiết bài viết / thông báo */}
+      {detailModalPost && (
+        <div
+          className="fixed inset-0 bg-black/60 backdrop-blur-[1px] z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
+          onClick={() => setDetailModalPost(null)}
+        >
+          <div
+            className="bg-white rounded-t-3xl sm:rounded-3xl w-full max-w-2xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between gap-3 bg-emerald-50/60">
+              <div className="flex flex-wrap items-center gap-2 min-w-0">
+                {detailModalPost.isPinned && (
+                  <span className="text-[11px] bg-amber-100 text-amber-800 px-2.5 py-0.5 rounded-full font-bold">📌 Ghim</span>
+                )}
+                <span className={`text-xs font-extrabold px-2.5 py-0.5 rounded-full ${
+                  detailModalPost.priority === 'urgent'
+                    ? 'bg-red-100 text-red-700'
+                    : detailModalPost.kind === 'news'
+                    ? 'bg-teal-100 text-teal-800'
+                    : 'bg-emerald-100 text-emerald-800'
+                }`}>
+                  {detailModalPost.badge}
+                </span>
+                {detailModalPost.createdAt && (
+                  <span className="text-xs text-slate-500">
+                    {new Date(detailModalPost.createdAt).toLocaleString('vi-VN', {
+                      timeZone: 'Asia/Ho_Chi_Minh',
+                      day: '2-digit',
+                      month: '2-digit',
+                      year: 'numeric',
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
+                  </span>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => setDetailModalPost(null)}
+                className="w-9 h-9 rounded-xl bg-white hover:bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-600 shrink-0"
+                aria-label="Đóng bài viết"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-5 sm:p-6 overflow-y-auto space-y-4">
+              <h2 className="text-xl sm:text-2xl font-extrabold text-slate-900 leading-snug">
+                {detailModalPost.title}
+              </h2>
+
+              <div className="text-sm sm:text-base text-slate-700 leading-relaxed whitespace-pre-line">
+                {detailModalPost.content}
+              </div>
+
+              {detailModalPost.imageUrl && (
+                <div className="space-y-2 pt-1">
+                  <a href={detailModalPost.imageUrl} target="_blank" rel="noreferrer" className="block">
+                    <img
+                      src={detailModalPost.imageUrl}
+                      alt={detailModalPost.title}
+                      className="w-full max-h-[65vh] object-contain rounded-2xl border border-slate-200 bg-slate-50"
+                    />
+                  </a>
+                  <div className="text-right">
+                    <a
+                      href={detailModalPost.imageUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1 text-xs font-bold text-emerald-700 hover:underline"
+                    >
+                      Mở ảnh kích thước gốc <ExternalLink className="w-3.5 h-3.5" />
+                    </a>
+                  </div>
+                </div>
+              )}
+
+              {detailModalPost.videoUrl && (
+                <a
+                  href={detailModalPost.videoUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-2 bg-sky-50 hover:bg-sky-100 text-sky-800 border border-sky-200 px-4 py-2.5 rounded-xl text-sm font-bold"
+                >
+                  ▶ Xem video hoạt động đính kèm <ExternalLink className="w-4 h-4" />
+                </a>
+              )}
+            </div>
+
+            <div className="px-5 py-3.5 border-t border-slate-100 bg-slate-50 flex items-center justify-between gap-3">
+              <button
+                type="button"
+                onClick={() => handleCopyPostLink(detailModalPost.shareType, detailModalPost.shareItem)}
+                className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-800 bg-emerald-100 hover:bg-emerald-200 px-4 py-2.5 rounded-xl transition"
+              >
+                {copiedKey === `${detailModalPost.shareType}-${detailModalPost.shareItem?.id}` ? (
+                  <Check className="w-4 h-4" />
+                ) : (
+                  <Copy className="w-4 h-4" />
+                )}
+                {copiedKey === `${detailModalPost.shareType}-${detailModalPost.shareItem?.id}`
+                  ? 'Đã sao chép link Zalo'
+                  : 'Sao chép link gửi Zalo'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setDetailModalPost(null)}
+                className="bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold px-5 py-2.5 rounded-xl transition"
+              >
+                Đóng lại
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showQRModal && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setShowQRModal(false)}>
