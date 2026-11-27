@@ -24,6 +24,7 @@ const FEEDBACK_ATTACHMENT_BUCKET = 'phan-anh-dinh-kem';
 const MAX_FEEDBACK_ATTACHMENT_COUNT = 3;
 const MAX_FEEDBACK_ATTACHMENT_SIZE = 8 * 1024 * 1024;
 const MAX_FEEDBACK_ATTACHMENTS_TOTAL_SIZE = 15 * 1024 * 1024;
+const NEWS_ITEMS_PER_SECTION = 5;
 const FEEDBACK_ATTACHMENT_MIME_TYPES = {
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
@@ -169,6 +170,39 @@ const getNewsImageMimeType = (file) => {
   if (NEWS_IMAGE_EXTENSIONS[file.type]) return file.type;
   const extension = String(file.name || '').split('.').pop().toLowerCase();
   return Object.entries(NEWS_IMAGE_EXTENSIONS).find(([, allowedExtension]) => allowedExtension === extension)?.[0] || '';
+};
+
+const NewsSectionControls = ({ sectionIndex, totalItems, onPrevious, onNext }) => {
+  const sectionCount = Math.ceil(totalItems / NEWS_ITEMS_PER_SECTION);
+  if (sectionCount <= 1) return null;
+  const firstItem = sectionIndex * NEWS_ITEMS_PER_SECTION + 1;
+  const lastItem = Math.min((sectionIndex + 1) * NEWS_ITEMS_PER_SECTION, totalItems);
+
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5">
+      <p className="text-sm font-semibold text-slate-700">
+        Mục {sectionIndex + 1} / {sectionCount} <span className="font-normal text-slate-500">· Bài {firstItem}–{lastItem} / {totalItems}</span>
+      </p>
+      <div className="flex gap-2">
+        <button
+          type="button"
+          onClick={onPrevious}
+          disabled={sectionIndex === 0}
+          className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Trước
+        </button>
+        <button
+          type="button"
+          onClick={onNext}
+          disabled={sectionIndex >= sectionCount - 1}
+          className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Tiếp
+        </button>
+      </div>
+    </div>
+  );
 };
 
 const parseMoneyAmount = (raw) => {
@@ -324,6 +358,8 @@ export default function App() {
   const [mode, setMode] = useState(isInitialAdmin ? 'admin' : 'public');
   const [tab, setTab] = useState('home');
   const [showAllHomeNews, setShowAllHomeNews] = useState(false);
+  const [homeNewsSectionIndex, setHomeNewsSectionIndex] = useState(0);
+  const [feedNewsSectionIndex, setFeedNewsSectionIndex] = useState(0);
   const [feedSubTab, setFeedSubTab] = useState('all');
   const [directorySubTab, setDirectorySubTab] = useState('officials');
   const [voiceSubTab, setVoiceSubTab] = useState('feedback');
@@ -527,7 +563,10 @@ export default function App() {
   const navigatePublic = (targetTab, subTab) => {
     setMode('public');
     setTab(targetTab);
-    if (targetTab === 'feed' && subTab) setFeedSubTab(subTab);
+    if (targetTab === 'feed' && subTab) {
+      setFeedSubTab(subTab);
+      setFeedNewsSectionIndex(0);
+    }
     if (targetTab === 'directory' && subTab) setDirectorySubTab(subTab);
     if (targetTab === 'voice' && subTab) setVoiceSubTab(subTab);
     if (targetTab === 'finance' && subTab) setFinancePublicSubTab(subTab);
@@ -1711,6 +1750,17 @@ export default function App() {
       return { ...item, content: parsed.content, image_url: parsed.imageUrl };
     }),
   ];
+  const allPublishedNewsSections = [];
+  for (let index = 0; index < allPublishedNews.length; index += NEWS_ITEMS_PER_SECTION) {
+    allPublishedNewsSections.push(allPublishedNews.slice(index, index + NEWS_ITEMS_PER_SECTION));
+  }
+  const lastNewsSectionIndex = Math.max(0, allPublishedNewsSections.length - 1);
+  const safeHomeNewsSectionIndex = Math.min(homeNewsSectionIndex, lastNewsSectionIndex);
+  const safeFeedNewsSectionIndex = Math.min(feedNewsSectionIndex, lastNewsSectionIndex);
+  const homeNewsItems = showAllHomeNews
+    ? (allPublishedNewsSections[safeHomeNewsSectionIndex] || [])
+    : allPublishedNews.slice(0, 1);
+  const feedNewsItems = allPublishedNewsSections[safeFeedNewsSectionIndex] || [];
 
   const upcomingEvents = events.filter((ev) => {
     const info = parseEventInfo(ev);
@@ -3468,7 +3518,7 @@ export default function App() {
                         </div>
                       ))}
 
-                      {allPublishedNews.slice(0, showAllHomeNews ? allPublishedNews.length : 1).map((n, index) => {
+                      {homeNewsItems.map((n, index) => {
                         const isFirstNewsToggle = index === 0 && allPublishedNews.length > 1;
                         return (
                           <div key={n.id} className="bg-white p-4 rounded-2xl border-l-4 border-l-teal-500 border border-slate-100 shadow-sm space-y-2">
@@ -3491,7 +3541,14 @@ export default function App() {
                             <h3 className="font-bold text-slate-800 text-base leading-snug">
                               <button
                                 type="button"
-                                onClick={() => isFirstNewsToggle ? setShowAllHomeNews(value => !value) : navigatePublic('feed', 'news')}
+                                onClick={() => {
+                                  if (isFirstNewsToggle) {
+                                    if (!showAllHomeNews) setHomeNewsSectionIndex(0);
+                                    setShowAllHomeNews(value => !value);
+                                  } else {
+                                    navigatePublic('feed', 'news');
+                                  }
+                                }}
                                 aria-expanded={isFirstNewsToggle ? showAllHomeNews : undefined}
                                 title={isFirstNewsToggle ? (showAllHomeNews ? 'Bấm để thu gọn danh sách tin tức' : 'Bấm để xem tất cả tin tức') : 'Mở mục tin tức'}
                                 className="flex w-full items-center justify-between gap-2 text-left hover:text-emerald-700"
@@ -3509,6 +3566,14 @@ export default function App() {
                           </div>
                         );
                       })}
+                      {showAllHomeNews && (
+                        <NewsSectionControls
+                          sectionIndex={safeHomeNewsSectionIndex}
+                          totalItems={allPublishedNews.length}
+                          onPrevious={() => setHomeNewsSectionIndex(index => Math.max(0, index - 1))}
+                          onNext={() => setHomeNewsSectionIndex(index => Math.min(lastNewsSectionIndex, index + 1))}
+                        />
+                      )}
                     </>
                   )}
                 </section>
@@ -3532,7 +3597,10 @@ export default function App() {
                     <button
                       key={f.id}
                       type="button"
-                      onClick={() => setFeedSubTab(f.id)}
+                      onClick={() => {
+                        setFeedSubTab(f.id);
+                        setFeedNewsSectionIndex(0);
+                      }}
                       className={`px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition ${
                         feedSubTab === f.id ? 'bg-emerald-700 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'
                       }`}
@@ -3590,7 +3658,15 @@ export default function App() {
                     {allPublishedNews.length === 0 && feedSubTab === 'news' && (
                       <p className="text-slate-500 text-sm">Chưa có bài viết nào.</p>
                     )}
-                    {allPublishedNews.map((n) => (
+                    {allPublishedNews.length > 0 && (
+                      <NewsSectionControls
+                        sectionIndex={safeFeedNewsSectionIndex}
+                        totalItems={allPublishedNews.length}
+                        onPrevious={() => setFeedNewsSectionIndex(index => Math.max(0, index - 1))}
+                        onNext={() => setFeedNewsSectionIndex(index => Math.min(lastNewsSectionIndex, index + 1))}
+                      />
+                    )}
+                    {feedNewsItems.map((n) => (
                       <div key={n.id} className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-2">
                         <div className="flex items-center justify-between gap-2">
                           <span className="text-xs bg-teal-100 text-teal-800 px-2.5 py-0.5 rounded-full font-medium">{n.category}</span>
